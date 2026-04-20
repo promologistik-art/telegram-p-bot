@@ -64,12 +64,25 @@ async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     
     current = project.signature or "не установлена"
+    
+    # Экранируем текущую подпись для отображения в HTML
+    current_display = current.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
     await update.message.reply_text(
         f"✍️ <b>Подпись проекта «{project.name}»</b>\n\n"
-        f"Текущая: {current}\n\n"
+        f"<b>Текущая подпись:</b>\n{current_display}\n\n"
         f"Отправьте текст подписи (или /cancel для отмены):\n\n"
-        f"💡 Подпись будет добавляться в конце каждого поста.\n"
-        f"Отправьте <code>удалить</code> чтобы убрать подпись.",
+        f"💡 <b>Подпись будет добавляться в конце каждого поста.</b>\n"
+        f"Отправьте <code>удалить</code> чтобы убрать подпись.\n\n"
+        f"🔗 <b>Кликабельные ссылки (Markdown):</b>\n"
+        f"• <code>[Текст](https://t.me/username)</code> — ссылка на канал\n"
+        f"• <code>@username</code> — упоминание\n"
+        f"• <code>[Текст](https://site.com)</code> — ссылка на сайт\n"
+        f"• <b>Жирный</b> — <code>*жирный*</code>\n"
+        f"• <i>Курсив</i> — <code>_курсив_</code>\n"
+        f"• <code>моноширинный</code> — <code>`моноширинный`</code>\n\n"
+        f"📝 <b>Пример:</b>\n"
+        f"<code>👉 [📢 Подпишись](https://t.me/my_channel) | *Важно!*</code>",
         parse_mode="HTML"
     )
     context.user_data['temp_project_id'] = project.id
@@ -84,8 +97,14 @@ async def set_signature_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         signature = None
         reply = "✅ Подпись удалена"
     else:
-        signature = text[:200]
-        reply = f"✅ Подпись установлена:\n\n{signature}"
+        signature = text[:500]  # Увеличим лимит до 500 символов
+        # Экранируем для отображения
+        display_text = signature.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        reply = (
+            f"✅ <b>Подпись установлена:</b>\n\n"
+            f"{display_text}\n\n"
+            f"💡 Подпись будет добавляться в конце каждого поста с поддержкой Markdown."
+        )
     
     async with AsyncSessionLocal() as session:
         await session.execute(
