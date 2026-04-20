@@ -93,7 +93,7 @@ class Scheduler:
                 logger.info(f"📡 Fetching @{source.channel_username} for project '{project.name}'")
                 
                 try:
-                    posts = await scraper.get_posts(source.channel_username, limit=15)
+                    posts = await scraper.get_posts(source.channel_username, limit=100)
                     logger.info(f"📨 @{source.channel_username}: {len(posts)} posts fetched")
                 except Exception as e:
                     logger.error(f"❌ Failed to fetch @{source.channel_username}: {e}")
