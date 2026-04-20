@@ -72,19 +72,22 @@ class PosterService:
                                 await self.bot.send_photo(
                                     chat_id=queue_item.target_channel_id,
                                     photo=f,
-                                    caption=caption if caption else None
+                                    caption=caption if caption else None,
+                                    parse_mode="Markdown"
                                 )
                             elif media_type == "video":
                                 await self.bot.send_video(
                                     chat_id=queue_item.target_channel_id,
                                     video=f,
-                                    caption=caption if caption else None
+                                    caption=caption if caption else None,
+                                    parse_mode="Markdown"
                                 )
                             else:
                                 await self.bot.send_document(
                                     chat_id=queue_item.target_channel_id,
                                     document=f,
-                                    caption=caption if caption else None
+                                    caption=caption if caption else None,
+                                    parse_mode="Markdown"
                                 )
                         
                         try:
@@ -98,27 +101,78 @@ class PosterService:
                         
                     except Exception as e:
                         logger.error(f"Failed to send media: {e}")
+                        # Пробуем отправить без parse_mode если ошибка форматирования
+                        if "parse" in str(e).lower() and caption:
+                            try:
+                                if media_type == "photo":
+                                    await self.bot.send_photo(
+                                        chat_id=queue_item.target_channel_id,
+                                        photo=f,
+                                        caption=caption
+                                    )
+                                elif media_type == "video":
+                                    await self.bot.send_video(
+                                        chat_id=queue_item.target_channel_id,
+                                        video=f,
+                                        caption=caption
+                                    )
+                                await self._mark_published(queue_item)
+                                logger.info(f"✅ Published post {queue_item.id} (without parse_mode)")
+                                return True
+                            except:
+                                pass
+                        
                         if caption:
                             try:
                                 await self.bot.send_message(
                                     chat_id=queue_item.target_channel_id,
-                                    text=caption
+                                    text=caption,
+                                    parse_mode="Markdown",
+                                    disable_web_page_preview=True
                                 )
                                 await self._mark_published(queue_item)
                                 logger.info(f"✅ Published post {queue_item.id} (text only)")
                                 return True
                             except:
-                                pass
+                                # Последняя попытка без форматирования
+                                try:
+                                    await self.bot.send_message(
+                                        chat_id=queue_item.target_channel_id,
+                                        text=caption,
+                                        disable_web_page_preview=True
+                                    )
+                                    await self._mark_published(queue_item)
+                                    logger.info(f"✅ Published post {queue_item.id} (text only, no parse)")
+                                    return True
+                                except:
+                                    pass
                         raise e
                         
                 elif caption:
-                    await self.bot.send_message(
-                        chat_id=queue_item.target_channel_id,
-                        text=caption
-                    )
-                    await self._mark_published(queue_item)
-                    logger.info(f"✅ Published post {queue_item.id} (text only)")
-                    return True
+                    try:
+                        await self.bot.send_message(
+                            chat_id=queue_item.target_channel_id,
+                            text=caption,
+                            parse_mode="Markdown",
+                            disable_web_page_preview=True
+                        )
+                        await self._mark_published(queue_item)
+                        logger.info(f"✅ Published post {queue_item.id} (text only)")
+                        return True
+                    except:
+                        # Пробуем без форматирования
+                        try:
+                            await self.bot.send_message(
+                                chat_id=queue_item.target_channel_id,
+                                text=caption,
+                                disable_web_page_preview=True
+                            )
+                            await self._mark_published(queue_item)
+                            logger.info(f"✅ Published post {queue_item.id} (text only, no parse)")
+                            return True
+                        except Exception as msg_e:
+                            logger.error(f"Failed to send text: {msg_e}")
+                            raise msg_e
                     
                 else:
                     logger.warning(f"⚠️ Empty post {queue_item.id}, marking as failed")
