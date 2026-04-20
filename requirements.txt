@@ -1,0 +1,9 @@
+python-telegram-bot==20.7
+python-dotenv==1.0.0
+aiosqlite==0.19.0
+sqlalchemy==2.0.23
+aiohttp==3.9.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
+pytz==2023.3
+openpyxl==3.1.2
