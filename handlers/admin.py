@@ -132,8 +132,15 @@ async def show_admin_users(query):
     
     for u in users:
         projects_count = await get_user_projects_count(u.telegram_id)
-        status_icon = "🟢" if u.subscription_active else "🟡" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "🔴"
-        display_name = u.full_name or u.username or f"Пользователь"
+        
+        if u.is_admin:
+            status_icon = "👑"
+            tariff_display = "Безлимит"
+        else:
+            status_icon = "🟢" if u.subscription_active else "🟡" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "🔴"
+            tariff_display = TARIFF_LIMITS.get(u.tariff, {}).get('name', '—')
+        
+        display_name = u.full_name or u.username or "Пользователь"
         
         text += f"{status_icon} {display_name}"
         if u.username:
@@ -141,7 +148,7 @@ async def show_admin_users(query):
         else:
             text += "\n"
         text += f"  🆔 {u.telegram_id} | 📁 {projects_count} проектов\n"
-        text += f"  💳 {TARIFF_LIMITS.get(u.tariff, {}).get('name', '—')}\n\n"
+        text += f"  💳 {tariff_display}\n\n"
         
         keyboard.append([
             InlineKeyboardButton(f"⚙️ Управлять {display_name[:15]}", callback_data=f"user_manage_{u.telegram_id}")
@@ -611,14 +618,20 @@ async def export_users_excel(query, context):
     
     for row, u in enumerate(users, 2):
         projects_count = await get_user_projects_count(u.telegram_id)
-        tariff_name = TARIFF_LIMITS.get(u.tariff, {}).get('name', u.tariff)
+        
+        if u.is_admin:
+            tariff_name = "Безлимит"
+            subscription_status = "Админ"
+        else:
+            tariff_name = TARIFF_LIMITS.get(u.tariff, {}).get('name', u.tariff)
+            subscription_status = "Активна" if u.subscription_active else ("Триал" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "Нет")
         
         ws.cell(row=row, column=1, value=u.telegram_id)
         ws.cell(row=row, column=2, value=u.username or "")
         ws.cell(row=row, column=3, value=u.full_name or "")
         ws.cell(row=row, column=4, value="Да" if u.is_admin else "Нет")
         ws.cell(row=row, column=5, value=tariff_name)
-        ws.cell(row=row, column=6, value="Активна" if u.subscription_active else ("Триал" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "Нет"))
+        ws.cell(row=row, column=6, value=subscription_status)
         ws.cell(row=row, column=7, value=u.trial_ends_at.strftime("%d.%m.%Y %H:%M") if u.trial_ends_at else "")
         ws.cell(row=row, column=8, value=projects_count)
         ws.cell(row=row, column=9, value=u.posts_parsed_today)
@@ -701,14 +714,21 @@ async def send_daily_report(query, context):
     
     for row, u in enumerate(users, 2):
         projects_count = await get_user_projects_count(u.telegram_id)
-        tariff_name = TARIFF_LIMITS.get(u.tariff, {}).get('name', u.tariff)
+        
+        if u.is_admin:
+            tariff_name = "Безлимит"
+            subscription_status = "Админ"
+        else:
+            tariff_name = TARIFF_LIMITS.get(u.tariff, {}).get('name', u.tariff)
+            subscription_status = "Активна" if u.subscription_active else "Триал"
+        
         days_left = (u.trial_ends_at - now).days if u.trial_ends_at else "-"
         
         ws.cell(row=row, column=1, value=u.telegram_id)
         ws.cell(row=row, column=2, value=u.username or "")
         ws.cell(row=row, column=3, value=u.full_name or "")
         ws.cell(row=row, column=4, value=tariff_name)
-        ws.cell(row=row, column=5, value="Активна" if u.subscription_active else "Триал")
+        ws.cell(row=row, column=5, value=subscription_status)
         ws.cell(row=row, column=6, value=u.trial_ends_at.strftime("%d.%m.%Y %H:%M") if u.trial_ends_at else "")
         ws.cell(row=row, column=7, value=days_left)
         ws.cell(row=row, column=8, value=projects_count)
