@@ -3,6 +3,7 @@ import logging
 import shutil
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import select, text
+from datetime import datetime, timedelta
 from config import Config
 from models import Base, User, Project, SourceChannel, TargetChannel
 
@@ -71,6 +72,7 @@ async def migrate_to_projects():
             await session.commit()
             logger.info("Migration completed")
         
+        # Добавляем новые поля в users
         try:
             await session.execute(text("ALTER TABLE users ADD COLUMN max_projects INTEGER DEFAULT 1"))
         except:
@@ -85,6 +87,52 @@ async def migrate_to_projects():
             await session.execute(text("ALTER TABLE projects ADD COLUMN signature TEXT"))
         except:
             pass
+        
+        # Новые поля для триала и подписки
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN trial_ends_at TIMESTAMP"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN subscription_active BOOLEAN DEFAULT FALSE"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN subscription_ends_at TIMESTAMP"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN tariff TEXT DEFAULT 'trial'"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN min_post_interval_minutes INTEGER DEFAULT 120"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN min_check_interval_minutes INTEGER DEFAULT 60"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN last_trial_warning_sent TIMESTAMP"))
+        except:
+            pass
+        
+        try:
+            await session.execute(text("ALTER TABLE users ADD COLUMN last_subscription_warning_sent TIMESTAMP"))
+        except:
+            pass
+        
+        # Устанавливаем trial_ends_at для существующих пользователей (5 дней от создания)
+        await session.execute(
+            text("UPDATE users SET trial_ends_at = datetime(created_at, '+5 days') WHERE trial_ends_at IS NULL")
+        )
         
         await session.commit()
 
@@ -104,12 +152,17 @@ async def init_db():
             admin = User(
                 telegram_id=Config.ADMIN_ID,
                 is_admin=True,
+                tariff="unlimited",
                 max_projects=999,
-                max_sources_per_project=999
+                max_sources_per_project=999,
+                min_post_interval_minutes=1,
+                min_check_interval_minutes=5,
+                subscription_active=True,
+                trial_ends_at=datetime.utcnow() + timedelta(days=36500)  # 100 лет
             )
             session.add(admin)
             await session.commit()
-            logger.info(f"Admin user {Config.ADMIN_ID} created")
+            logger.info(f"Admin user {Config.ADMIN_ID} created with unlimited tariff")
         
         result = await session.execute(
             select(Project).where(Project.user_id == Config.ADMIN_ID).order_by(Project.id)

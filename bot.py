@@ -18,14 +18,19 @@ from handlers import (
     my_sources, delete_source_callback,
     add_target_start, add_target_forward, my_targets, delete_target_callback,
     set_interval_start, set_interval_callback,
+    set_post_interval_start, set_post_interval_callback,
     set_signature_start, set_signature_input,
     status, project_stats,
     parse_now, queue_status, post_now, clear_old_queue, clear_failed_queue,
     admin_panel, admin_callback, admin_back_callback,
+    admin_set_tariff_start, admin_extend_trial_start,
+    broadcast_start, broadcast_send,
     test_scraper,
     setup_bot_commands,
     AWAITING_SOURCE_USERNAME, AWAITING_TARGET_FORWARD, AWAITING_CRITERIA,
-    AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE
+    AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE,
+    AWAITING_POST_INTERVAL, AWAITING_TARIFF_SELECT, AWAITING_TARIFF_USERNAME,
+    AWAITING_EXTEND_DAYS, AWAITING_BROADCAST_MESSAGE
 )
 
 from poster import PosterService
@@ -62,7 +67,8 @@ async def main():
     auto_backup = AutoBackup(backup_service)
     auto_backup_task = asyncio.create_task(auto_backup.start())
     
-    # Conversation Handlers
+    # ============ Conversation Handlers ============
+    
     add_source_conv = ConversationHandler(
         entry_points=[CommandHandler("add_source", add_source_start)],
         states={
@@ -90,6 +96,14 @@ async def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
+    set_post_interval_conv = ConversationHandler(
+        entry_points=[CommandHandler("set_post_interval", set_post_interval_start)],
+        states={
+            AWAITING_POST_INTERVAL: [CallbackQueryHandler(set_post_interval_callback, pattern="^post_")]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    
     set_signature_conv = ConversationHandler(
         entry_points=[CommandHandler("set_signature", set_signature_start)],
         states={
@@ -98,7 +112,26 @@ async def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
-    # Command Handlers
+    # Админские диалоги
+    set_tariff_conv = ConversationHandler(
+        entry_points=[CommandHandler("admin_set_tariff", admin_set_tariff_start)],
+        states={
+            AWAITING_TARIFF_SELECT: [CallbackQueryHandler(admin_callback, pattern="^tariff_set_")],
+            AWAITING_TARIFF_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_callback)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_start)],
+        states={
+            AWAITING_BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_send)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    
+    # ============ Command Handlers ============
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("my_projects", my_projects))
@@ -113,23 +146,37 @@ async def main():
     app.add_handler(CommandHandler("clear_failed", clear_failed_queue))
     app.add_handler(CommandHandler("test", test_scraper))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("admin_extend_trial", admin_extend_trial_start))
     
-    # Conversation Handlers
+    # ============ Conversation Handlers (register) ============
+    
     app.add_handler(add_source_conv)
     app.add_handler(add_target_conv)
     app.add_handler(set_interval_conv)
+    app.add_handler(set_post_interval_conv)
     app.add_handler(set_signature_conv)
+    app.add_handler(set_tariff_conv)
+    app.add_handler(broadcast_conv)
     
-    # Message Handlers
+    # ============ Message Handlers ============
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_project_name))
     
-    # Callback Handlers
+    # ============ Callback Handlers ============
+    
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^tariff_set_"))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^user_tariff_"))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^extend_user_"))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^deactivate_user_"))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^activate_user_"))
     app.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin_back$"))
-    app.add_handler(CallbackQueryHandler(projects_callback, pattern="^(create_project|select_project_|delete_project_|confirm_delete_|cancel_delete|stats_project_)"))
+    app.add_handler(CallbackQueryHandler(projects_callback, pattern="^(create_project|select_project_|delete_project_|confirm_delete_|cancel_delete|stats_project_|settings_project_)"))
     app.add_handler(CallbackQueryHandler(back_to_projects_callback, pattern="^back_to_projects$"))
     app.add_handler(CallbackQueryHandler(delete_source_callback, pattern="^del_source_"))
     app.add_handler(CallbackQueryHandler(delete_target_callback, pattern="^del_target_"))
+    
+    # ============ Запуск ============
     
     await app.initialize()
     await app.start()

@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import Optional, Tuple
 from datetime import datetime, timedelta
 import pytz
 
@@ -16,41 +16,65 @@ def extract_channel_username(text: str) -> Optional[str]:
     return None
 
 
-def calculate_score(post: dict, criteria: dict) -> int:
+def calculate_score(post: dict, criteria: dict, post_time: datetime = None) -> Tuple[int, bool]:
     """
     Расчет очков поста на основе критериев.
-    Возвращает -1 если пост не проходит по минимальным критериям.
-    """
-    if not criteria:
-        return 1
+    Возвращает (score, is_fallback)
     
+    is_fallback = True если пост не прошёл критерии, но мы берём его как fallback (самый свежий)
+    is_fallback = False если пост прошёл критерии
+    """
     views = post.get("views", 0)
     reactions = post.get("reactions", 0)
     
     min_views = criteria.get("min_views", 0)
     min_reactions = criteria.get("min_reactions", 0)
     
+    # Проверяем, проходит ли по критериям
+    passes_criteria = True
+    
     if min_views and views < min_views:
-        return -1
+        passes_criteria = False
     
     if min_reactions and reactions < min_reactions:
-        return -1
+        passes_criteria = False
     
-    score = 0
+    # Если нет критериев — считаем что проходит
+    if not min_views and not min_reactions:
+        passes_criteria = True
     
-    if min_views:
-        score += (views // 1000) * 10
-    
-    if min_reactions:
-        score += reactions
-    
-    if post.get("has_media", False):
-        score += 5
-    
-    if score == 0:
-        return 1
-    
-    return score
+    if passes_criteria:
+        # Основной score
+        score = 0
+        if min_views:
+            score += (views // 1000) * 10  # каждые 1000 просмотров = 10 очков
+        if min_reactions:
+            score += reactions  # каждая реакция = 1 очко
+        if post.get("has_media", False):
+            score += 5  # бонус за медиа
+        
+        if score == 0:
+            score = 1
+        
+        return (score, False)
+    else:
+        # Fallback — используем timestamp (чем новее, тем выше score)
+        if post_time:
+            # Используем timestamp поста
+            score = int(post_time.timestamp())
+        else:
+            # Если нет времени, пробуем распарсить из datetime строки
+            dt_str = post.get("datetime", "")
+            if dt_str:
+                try:
+                    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                    score = int(dt.timestamp())
+                except:
+                    score = 0
+            else:
+                score = 0
+        
+        return (score, True)
 
 
 def clean_caption(text: str) -> str:
@@ -76,7 +100,7 @@ def clean_caption(text: str) -> str:
     # Сохраняем структуру переносов
     text = re.sub(r'\n\s*\n', '\n\n', text)
     
-    # Убираем множественные пробелы (но не между точкой и словом)
+    # Убираем множественные пробелы
     text = re.sub(r' +', ' ', text)
     
     # Исправляем слипшиеся предложения (точка + слово без пробела)

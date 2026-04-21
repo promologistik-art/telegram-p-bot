@@ -6,7 +6,10 @@ from database import AsyncSessionLocal
 from models import User, SourceChannel
 from scraper import TelegramScraper
 from utils import extract_channel_username
-from .utils import require_project, get_sources_count, get_project_target, send_project_ready_message
+from .utils import (
+    require_project, get_sources_count, get_project_target, 
+    send_project_ready_message, check_action_limit, check_user_access
+)
 from .constants import AWAITING_SOURCE_USERNAME, AWAITING_CRITERIA, AWAITING_VIEWS, AWAITING_REACTIONS
 
 logger = logging.getLogger(__name__)
@@ -19,16 +22,17 @@ async def add_source_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not project:
         return ConversationHandler.END
     
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
-        user = result.scalar_one()
-        
-        count = await get_sources_count(project.id)
-        if count >= user.max_sources_per_project:
-            await update.message.reply_text(
-                f"❌ Достигнут лимит источников ({user.max_sources_per_project})."
-            )
-            return ConversationHandler.END
+    # Проверяем доступ
+    has_access, message, user = await check_user_access(telegram_id)
+    if not has_access:
+        await update.message.reply_text(message)
+        return ConversationHandler.END
+    
+    # Проверяем лимит источников
+    can_add, limit_msg = await check_action_limit(user, "add_source", project_id=project.id)
+    if not can_add and not user.is_admin:
+        await update.message.reply_text(f"❌ {limit_msg}")
+        return ConversationHandler.END
     
     context.user_data['temp_project_id'] = project.id
     context.user_data['temp_project_name'] = project.name
@@ -163,6 +167,7 @@ async def criteria_reactions_input(update: Update, context: ContextTypes.DEFAULT
 
 async def save_source_with_criteria(target, context, temp: dict, criteria: dict):
     async with AsyncSessionLocal() as session:
+        # Проверяем, не добавлен ли уже такой источник в проект
         result = await session.execute(
             select(SourceChannel).where(
                 SourceChannel.project_id == temp['project_id'],
@@ -217,6 +222,7 @@ async def save_source_with_criteria(target, context, temp: dict, criteria: dict)
             await target.message.reply_text(
                 f"✅ <b>Проект «{project_name}» готов к работе!</b>\n\n"
                 f"• /set_interval — настроить частоту\n"
+                f"• /set_post_interval — интервал публикации\n"
                 f"• /parse — запустить парсинг",
                 parse_mode="HTML"
             )
@@ -259,8 +265,12 @@ async def my_sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 criteria_text.append(f"❤️ ≥{src.criteria['min_reactions']}")
         criteria_str = ", ".join(criteria_text) if criteria_text else "без критериев"
         
-        text += f"• @{src.channel_username}\n"
-        text += f"  📊 {criteria_str}\n\n"
+        status_icon = "✅" if src.is_active else "❌"
+        text += f"{status_icon} @{src.channel_username}\n"
+        text += f"   📊 {criteria_str}\n"
+        if src.last_parsed:
+            text += f"   🕐 {src.last_parsed.strftime('%d.%m.%Y %H:%M')}\n"
+        text += "\n"
         
         keyboard.append([
             InlineKeyboardButton(f"❌ Удалить @{src.channel_username}", callback_data=f"del_source_{src.id}")
