@@ -6,6 +6,7 @@ load_dotenv()
 class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+    ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
     
     # Лимиты по умолчанию
     DEFAULT_MAX_PROJECTS = int(os.getenv("DEFAULT_MAX_PROJECTS", "1"))
@@ -14,7 +15,7 @@ class Config:
     
     # Настройки публикации
     DEFAULT_POST_INTERVAL_HOURS = int(os.getenv("DEFAULT_POST_INTERVAL_HOURS", "2"))
-    MIN_POST_INTERVAL_MINUTES = int(os.getenv("MIN_POST_INTERVAL_MINUTES", "30"))  # Минимум 30 минут между постами
+    MIN_POST_INTERVAL_MINUTES = int(os.getenv("MIN_POST_INTERVAL_MINUTES", "30"))
     DEFAULT_ACTIVE_HOURS_START = int(os.getenv("DEFAULT_ACTIVE_HOURS_START", "8"))
     DEFAULT_ACTIVE_HOURS_END = int(os.getenv("DEFAULT_ACTIVE_HOURS_END", "22"))
     

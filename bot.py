@@ -66,7 +66,8 @@ async def main():
     auto_backup = AutoBackup(backup_service)
     auto_backup_task = asyncio.create_task(auto_backup.start())
     
-    # Conversation Handlers
+    # ============ Conversation Handlers ============
+    
     add_source_conv = ConversationHandler(
         entry_points=[CommandHandler("add_source", add_source_start)],
         states={
@@ -118,9 +119,12 @@ async def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
-    # Command Handlers
+    # ============ Command Handlers ============
+    # ВАЖНО: команды должны быть ЗАРЕГИСТРИРОВАНЫ ДО ConversationHandler
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("test", test_scraper))  # ← ДО broadcast_conv
     app.add_handler(CommandHandler("my_projects", my_projects))
     app.add_handler(CommandHandler("my_sources", my_sources))
     app.add_handler(CommandHandler("my_targets", my_targets))
@@ -132,23 +136,25 @@ async def main():
     app.add_handler(CommandHandler("clear_queue", clear_old_queue))
     app.add_handler(CommandHandler("clear_failed", clear_failed_queue))
     app.add_handler(CommandHandler("reset_history", reset_history))
-    app.add_handler(CommandHandler("test", test_scraper))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("admin_set_tariff", admin_set_tariff_start))
     app.add_handler(CommandHandler("admin_extend_trial", admin_extend_trial_start))
     
-    # Conversation Handlers
+    # ============ Conversation Handlers (register) ============
+    
     app.add_handler(add_source_conv)
     app.add_handler(add_target_conv)
     app.add_handler(set_interval_conv)
     app.add_handler(set_post_interval_conv)
     app.add_handler(set_signature_conv)
-    app.add_handler(broadcast_conv)
+    app.add_handler(broadcast_conv)  # ← ПОСЛЕ test_scraper
     
-    # Message Handlers
+    # ============ Message Handlers ============
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_project_name))
     
-    # Callback Handlers
+    # ============ Callback Handlers ============
+    
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_|tariff_set_|user_tariff_|extend_user_|deactivate_user_|activate_user_|user_manage_|tariff_for_|set_tariff_)"))
     app.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin_back$"))
     app.add_handler(CallbackQueryHandler(projects_callback, pattern="^(create_project|select_project_|delete_project_|confirm_delete_|cancel_delete|stats_project_|settings_project_)"))
