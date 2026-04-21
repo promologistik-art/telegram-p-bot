@@ -26,9 +26,12 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Нет доступа")
         return
     
+    source_state = "ВКЛ ✅" if Config.SHOW_SOURCE_SIGNATURE else "ВЫКЛ ❌"
+    
     keyboard = [
         [InlineKeyboardButton("👥 Пользователи", callback_data="admin_users_list")],
         [InlineKeyboardButton("💳 Управление тарифами", callback_data="admin_tariff_menu")],
+        [InlineKeyboardButton(f"🔧 Источник: {source_state}", callback_data="admin_toggle_source")],
         [InlineKeyboardButton("💾 Создать бэкап", callback_data="admin_backup_create")],
         [InlineKeyboardButton("📦 Список бэкапов", callback_data="admin_backup_list")],
         [InlineKeyboardButton("📊 Экспорт в Excel", callback_data="admin_export")],
@@ -67,6 +70,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin_users(query)
     elif action == "admin_tariff_menu":
         await show_tariff_menu(query)
+    elif action == "admin_toggle_source":
+        await toggle_source_signature(query)
     elif action == "admin_backup_create":
         await create_backup_admin(query)
     elif action == "admin_backup_list":
@@ -118,6 +123,20 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = int(parts[2])
         tariff = parts[3]
         await confirm_set_tariff(query, user_id, tariff)
+
+
+async def toggle_source_signature(query):
+    new_state = Config.toggle_source_signature()
+    state_text = "ВКЛ ✅" if new_state else "ВЫКЛ ❌"
+    
+    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]
+    await query.edit_message_text(
+        f"🔧 <b>Отображение источника</b>\n\n"
+        f"Текущее состояние: {state_text}\n\n"
+        f"При включении под каждым постом будет добавляться 📡 @источник.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
 
 
 async def show_admin_users(query):
@@ -186,6 +205,25 @@ async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ Нет доступа")
         return ConversationHandler.END
     
+    text = (
+        "💎 <b>Выберите тариф:</b>\n\n"
+        "🟡 <b>Базовый</b> — 290 ₽/мес\n"
+        "   • 1 проект\n"
+        "   • 3 источника на проект\n"
+        "   • Интервал постинга от 2 часов\n\n"
+        "🟠 <b>Стандарт</b> — 590 ₽/мес\n"
+        "   • 3 проекта\n"
+        "   • 5 источников на проект\n"
+        "   • Интервал постинга от 1 часа\n\n"
+        "🔴 <b>PRO</b> — 990 ₽/мес\n"
+        "   • 10 проектов\n"
+        "   • 10 источников на проект\n"
+        "   • Интервал постинга от 30 минут\n\n"
+        "👑 <b>Безлимит</b> — 1990 ₽/мес\n"
+        "   • Без ограничений\n\n"
+        "<i>Нажмите на кнопку ниже, затем выберите пользователя.</i>"
+    )
+    
     keyboard = [
         [InlineKeyboardButton("🟡 Базовый (290₽/мес)", callback_data="tariff_set_basic")],
         [InlineKeyboardButton("🟠 Стандарт (590₽/мес)", callback_data="tariff_set_standard")],
@@ -194,7 +232,7 @@ async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_T
     ]
     
     await update.message.reply_text(
-        "💎 <b>Выберите тариф:</b>",
+        text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -463,6 +501,14 @@ async def show_user_manage_menu(query, user_id: int):
 
 
 async def tariff_select_menu(query):
+    text = (
+        "💎 <b>Выберите тариф:</b>\n\n"
+        "🟡 <b>Базовый</b> — 290 ₽/мес (1 проект, 3 источника, постинг от 2ч)\n"
+        "🟠 <b>Стандарт</b> — 590 ₽/мес (3 проекта, 5 источников, постинг от 1ч)\n"
+        "🔴 <b>PRO</b> — 990 ₽/мес (10 проектов, 10 источников, постинг от 30мин)\n"
+        "👑 <b>Безлимит</b> — 1990 ₽/мес (без ограничений)\n"
+    )
+    
     keyboard = [
         [InlineKeyboardButton("🟡 Базовый (290₽/мес)", callback_data="tariff_set_basic")],
         [InlineKeyboardButton("🟠 Стандарт (590₽/мес)", callback_data="tariff_set_standard")],
@@ -472,13 +518,21 @@ async def tariff_select_menu(query):
     ]
     
     await query.edit_message_text(
-        "💎 <b>Выберите тариф:</b>",
+        text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
 
 
 async def tariff_select_menu_for_user(query, user_id: int):
+    text = (
+        f"💎 <b>Выберите тариф для пользователя:</b>\n\n"
+        f"🟡 <b>Базовый</b> — 290 ₽/мес (1 проект, 3 источника)\n"
+        f"🟠 <b>Стандарт</b> — 590 ₽/мес (3 проекта, 5 источников)\n"
+        f"🔴 <b>PRO</b> — 990 ₽/мес (10 проектов, 10 источников)\n"
+        f"👑 <b>Безлимит</b> — 1990 ₽/мес (без ограничений)\n"
+    )
+    
     keyboard = [
         [InlineKeyboardButton("🟡 Базовый", callback_data=f"set_tariff_{user_id}_basic")],
         [InlineKeyboardButton("🟠 Стандарт", callback_data=f"set_tariff_{user_id}_standard")],
@@ -488,7 +542,7 @@ async def tariff_select_menu_for_user(query, user_id: int):
     ]
     
     await query.edit_message_text(
-        f"💎 <b>Выберите тариф для пользователя:</b>",
+        text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
