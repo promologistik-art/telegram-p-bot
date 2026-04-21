@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from database import AsyncSessionLocal
 from models import PostQueue, PublishedPost, TargetChannel, Project
 from utils import clean_caption
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +56,21 @@ class PosterService:
                     project = result.scalar_one_or_none()
                     signature = project.signature if project else None
                 
-                # Добавляем подпись, если она есть
+                # Добавляем подпись проекта
                 if signature:
                     if caption:
                         caption += f"\n\n{signature}"
                     else:
                         caption = signature
+                
+                # Добавляем источник, если включено глобально
+                if Config.SHOW_SOURCE_SIGNATURE:
+                    source = post_data.get("source_username", "")
+                    if source:
+                        if caption:
+                            caption += f"\n\n📡 @{source}"
+                        else:
+                            caption = f"📡 @{source}"
                 
                 media_path = post_data.get("media_path")
                 media_type = post_data.get("media_type")
@@ -101,27 +111,6 @@ class PosterService:
                         
                     except Exception as e:
                         logger.error(f"Failed to send media: {e}")
-                        # Пробуем отправить без parse_mode если ошибка форматирования
-                        if "parse" in str(e).lower() and caption:
-                            try:
-                                if media_type == "photo":
-                                    await self.bot.send_photo(
-                                        chat_id=queue_item.target_channel_id,
-                                        photo=f,
-                                        caption=caption
-                                    )
-                                elif media_type == "video":
-                                    await self.bot.send_video(
-                                        chat_id=queue_item.target_channel_id,
-                                        video=f,
-                                        caption=caption
-                                    )
-                                await self._mark_published(queue_item)
-                                logger.info(f"✅ Published post {queue_item.id} (without parse_mode)")
-                                return True
-                            except:
-                                pass
-                        
                         if caption:
                             try:
                                 await self.bot.send_message(
@@ -134,7 +123,6 @@ class PosterService:
                                 logger.info(f"✅ Published post {queue_item.id} (text only)")
                                 return True
                             except:
-                                # Последняя попытка без форматирования
                                 try:
                                     await self.bot.send_message(
                                         chat_id=queue_item.target_channel_id,
@@ -160,7 +148,6 @@ class PosterService:
                         logger.info(f"✅ Published post {queue_item.id} (text only)")
                         return True
                     except:
-                        # Пробуем без форматирования
                         try:
                             await self.bot.send_message(
                                 chat_id=queue_item.target_channel_id,

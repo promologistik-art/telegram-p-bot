@@ -19,6 +19,9 @@ class Config:
     DEFAULT_ACTIVE_HOURS_START = int(os.getenv("DEFAULT_ACTIVE_HOURS_START", "8"))
     DEFAULT_ACTIVE_HOURS_END = int(os.getenv("DEFAULT_ACTIVE_HOURS_END", "22"))
     
+    # Глобальные настройки
+    SHOW_SOURCE_SIGNATURE = os.getenv("SHOW_SOURCE_SIGNATURE", "false").lower() == "true"
+    
     TIMEZONE = "Europe/Moscow"
     
     # Пути
@@ -37,5 +40,10 @@ class Config:
             raise ValueError("BOT_TOKEN is required")
         if not cls.ADMIN_ID:
             raise ValueError("ADMIN_ID is required")
+    
+    @classmethod
+    def toggle_source_signature(cls):
+        cls.SHOW_SOURCE_SIGNATURE = not cls.SHOW_SOURCE_SIGNATURE
+        return cls.SHOW_SOURCE_SIGNATURE
 
 Config.validate()
