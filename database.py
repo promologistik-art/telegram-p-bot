@@ -5,16 +5,14 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy import select, text
 from datetime import datetime, timedelta
 from config import Config
-from models import Base, User, Project, SourceChannel, TargetChannel
+from models import Base, User, Project, SourceChannel, TargetChannel, ParsedPost
 
 logger = logging.getLogger(__name__)
 
-# Создаём все необходимые папки
 os.makedirs(Config.DATA_DIR, exist_ok=True)
 os.makedirs(Config.TEMP_DIR, exist_ok=True)
 os.makedirs(Config.BACKUP_DIR, exist_ok=True)
 
-# Проверяем, есть ли старая БД в корне, и переносим в data/
 old_db_path = "bot.db"
 if os.path.exists(old_db_path) and not os.path.exists(Config.DB_PATH):
     shutil.move(old_db_path, Config.DB_PATH)
@@ -23,12 +21,11 @@ if os.path.exists(old_db_path) and not os.path.exists(Config.DB_PATH):
 engine = create_async_engine(f"sqlite+aiosqlite:///{Config.DB_PATH}", echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-parsed_urls = set()
+# Кэш спарсенных постов: project_id -> set of urls
+parsed_urls = {}
 
 
 async def migrate_to_projects():
-    """Автоматическая миграция старых данных в новую структуру проектов."""
-    
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")
@@ -67,79 +64,67 @@ async def migrate_to_projects():
                     for target in old_targets:
                         target.project_id = project.id
                     
-                    logger.info(f"Migrated user {user.telegram_id}: {len(old_sources)} sources, {len(old_targets)} targets")
+                    logger.info(f"Migrated user {user.telegram_id}")
             
             await session.commit()
             logger.info("Migration completed")
         
-        # Добавляем новые поля в users
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN max_projects INTEGER DEFAULT 1"))
-        except:
-            pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN max_sources_per_project INTEGER DEFAULT 3"))
-        except:
-            pass
+        # Добавляем новые поля
+        for field, default in [
+            ("max_projects", "1"),
+            ("max_sources_per_project", "3"),
+            ("signature", "TEXT"),
+            ("trial_ends_at", "TIMESTAMP"),
+            ("subscription_active", "FALSE"),
+            ("subscription_ends_at", "TIMESTAMP"),
+            ("tariff", "'trial'"),
+            ("min_post_interval_minutes", "120"),
+            ("min_check_interval_minutes", "60"),
+            ("last_trial_warning_sent", "TIMESTAMP"),
+            ("last_subscription_warning_sent", "TIMESTAMP"),
+        ]:
+            try:
+                await session.execute(text(f"ALTER TABLE users ADD COLUMN {field} {default}"))
+            except:
+                pass
         
         try:
             await session.execute(text("ALTER TABLE projects ADD COLUMN signature TEXT"))
         except:
             pass
         
-        # Новые поля для триала и подписки
+        # Миграция parsed_posts — добавляем project_id
         try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN trial_ends_at TIMESTAMP"))
+            await session.execute(text("ALTER TABLE parsed_posts ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
         except:
             pass
         
+        # Заполняем project_id для существующих записей
+        await session.execute(text("""
+            UPDATE parsed_posts 
+            SET project_id = (
+                SELECT project_id FROM source_channels 
+                WHERE source_channels.id = parsed_posts.source_channel_id
+            )
+            WHERE project_id IS NULL
+        """))
+        
+        # Удаляем старый уникальный constraint если есть
         try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN subscription_active BOOLEAN DEFAULT FALSE"))
+            await session.execute(text("DROP INDEX IF EXISTS idx_parsed_posts_post_url"))
         except:
             pass
         
+        # Создаём новый составной уникальный constraint
         try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN subscription_ends_at TIMESTAMP"))
+            await session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_project_post ON parsed_posts(project_id, post_url)"))
         except:
             pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN tariff TEXT DEFAULT 'trial'"))
-        except:
-            pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN min_post_interval_minutes INTEGER DEFAULT 120"))
-        except:
-            pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN min_check_interval_minutes INTEGER DEFAULT 60"))
-        except:
-            pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN last_trial_warning_sent TIMESTAMP"))
-        except:
-            pass
-        
-        try:
-            await session.execute(text("ALTER TABLE users ADD COLUMN last_subscription_warning_sent TIMESTAMP"))
-        except:
-            pass
-        
-        # Устанавливаем trial_ends_at для существующих пользователей (5 дней от создания)
-        await session.execute(
-            text("UPDATE users SET trial_ends_at = datetime(created_at, '+5 days') WHERE trial_ends_at IS NULL")
-        )
         
         await session.commit()
 
 
 async def init_db():
-    """Инициализация базы данных с авто-миграцией."""
-    
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
@@ -158,11 +143,11 @@ async def init_db():
                 min_post_interval_minutes=1,
                 min_check_interval_minutes=5,
                 subscription_active=True,
-                trial_ends_at=datetime.utcnow() + timedelta(days=36500)  # 100 лет
+                trial_ends_at=datetime.utcnow() + timedelta(days=36500)
             )
             session.add(admin)
             await session.commit()
-            logger.info(f"Admin user {Config.ADMIN_ID} created with unlimited tariff")
+            logger.info(f"Admin user {Config.ADMIN_ID} created")
         
         result = await session.execute(
             select(Project).where(Project.user_id == Config.ADMIN_ID).order_by(Project.id)
@@ -181,46 +166,66 @@ async def init_db():
             session.add(admin_project)
             await session.commit()
             logger.info("Admin project created")
-        else:
-            logger.info(f"Admin has {len(admin_projects)} project(s)")
 
 
-async def is_post_parsed(post_url: str) -> bool:
-    if post_url in parsed_urls:
+async def is_post_parsed(project_id: int, post_url: str) -> bool:
+    cache_key = f"{project_id}:{post_url}"
+    if cache_key in parsed_urls:
         return True
+    
     async with AsyncSessionLocal() as session:
-        from models import ParsedPost
-        result = await session.execute(select(ParsedPost).where(ParsedPost.post_url == post_url))
+        result = await session.execute(
+            select(ParsedPost).where(
+                ParsedPost.project_id == project_id,
+                ParsedPost.post_url == post_url
+            )
+        )
         exists = result.scalar_one_or_none() is not None
         if exists:
-            parsed_urls.add(post_url)
+            parsed_urls[cache_key] = True
         return exists
 
 
-async def mark_post_parsed(source_channel_id: int, post_url: str):
-    parsed_urls.add(post_url)
+async def mark_post_parsed(project_id: int, source_channel_id: int, post_url: str):
+    cache_key = f"{project_id}:{post_url}"
+    parsed_urls[cache_key] = True
+    
     async with AsyncSessionLocal() as session:
-        from models import ParsedPost
-        post = ParsedPost(source_channel_id=source_channel_id, post_url=post_url)
+        result = await session.execute(
+            select(ParsedPost).where(
+                ParsedPost.project_id == project_id,
+                ParsedPost.post_url == post_url
+            )
+        )
+        if result.scalar_one_or_none():
+            return
+        
+        post = ParsedPost(
+            project_id=project_id,
+            source_channel_id=source_channel_id,
+            post_url=post_url
+        )
         session.add(post)
-        await session.commit()
+        try:
+            await session.commit()
+        except:
+            await session.rollback()
+
+
+async def clear_parsed_cache():
+    parsed_urls.clear()
 
 
 async def get_active_projects():
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Project).where(Project.is_active == True)
-        )
+        result = await session.execute(select(Project).where(Project.is_active == True))
         return result.scalars().all()
 
 
 async def get_user_projects(telegram_id: int):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Project).where(
-                Project.user_id == telegram_id,
-                Project.is_active == True
-            )
+            select(Project).where(Project.user_id == telegram_id, Project.is_active == True)
         )
         return result.scalars().all()
 

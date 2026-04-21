@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, BigInteger, Boolean, DateTime, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, BigInteger, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timedelta
 
@@ -19,9 +19,9 @@ class User(Base):
     trial_ends_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(days=5))
     subscription_active = Column(Boolean, default=False)
     subscription_ends_at = Column(DateTime, nullable=True)
-    tariff = Column(String, default="trial")  # trial, basic, standard, pro, unlimited
+    tariff = Column(String, default="trial")
     
-    # Лимиты (вычисляются из тарифа, но хранятся для гибкости)
+    # Лимиты
     max_projects = Column(Integer, default=1)
     max_sources_per_project = Column(Integer, default=3)
     min_post_interval_minutes = Column(Integer, default=120)
@@ -43,21 +43,12 @@ class Project(Base):
     user_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
     name = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
-    
-    # Настройки парсинга
     check_interval_minutes = Column(Integer, default=60)
-    
-    # Настройки публикации
     post_interval_hours = Column(Integer, default=2)
     active_hours_start = Column(Integer, default=8)
     active_hours_end = Column(Integer, default=22)
-    
-    # Подпись
     signature = Column(String, nullable=True)
-    
     created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Статистика проекта
     posts_parsed_today = Column(Integer, default=0)
     posts_posted_today = Column(Integer, default=0)
     last_reset = Column(DateTime, default=datetime.utcnow)
@@ -67,8 +58,7 @@ class SourceChannel(Base):
     __tablename__ = "source_channels"
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
-    user_id = Column(BigInteger, nullable=True)  # для обратной совместимости
-    
+    user_id = Column(BigInteger, nullable=True)
     channel_username = Column(String, nullable=False)
     channel_title = Column(String, nullable=True)
     criteria = Column(JSON, default={})
@@ -82,8 +72,7 @@ class TargetChannel(Base):
     __tablename__ = "target_channels"
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
-    user_id = Column(BigInteger, nullable=True)  # для обратной совместимости
-    
+    user_id = Column(BigInteger, nullable=True)
     channel_id = Column(BigInteger, nullable=False)
     channel_username = Column(String, nullable=True)
     channel_title = Column(String, nullable=True)
@@ -95,9 +84,14 @@ class TargetChannel(Base):
 class ParsedPost(Base):
     __tablename__ = "parsed_posts"
     id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
     source_channel_id = Column(Integer, nullable=False)
-    post_url = Column(String, nullable=False, unique=True)
+    post_url = Column(String, nullable=False)
     parsed_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        UniqueConstraint('project_id', 'post_url', name='uq_project_post'),
+    )
 
 
 class PostQueue(Base):
@@ -107,7 +101,7 @@ class PostQueue(Base):
     target_channel_id = Column(BigInteger, nullable=False)
     post_data = Column(JSON, nullable=False)
     scheduled_time = Column(DateTime, nullable=False)
-    status = Column(String, default="pending")  # pending, published, failed
+    status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
     published_at = Column(DateTime, nullable=True)
     error_message = Column(String, nullable=True)

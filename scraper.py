@@ -179,6 +179,16 @@ class TelegramScraper:
                     media_type = "video"
                     media_url = src
         
+        # Способ 5: Ссылка на видео (YouTube и т.д.)
+        if not has_photo and not has_video:
+            link_preview = msg_div.find("a", class_="tgme_widget_message_link_preview")
+            if link_preview:
+                img = link_preview.find("img")
+                if img:
+                    has_photo = True
+                    media_type = "photo"
+                    media_url = img.get("src")
+        
         return {
             "url": post_url,
             "message_id": message_id,
@@ -247,12 +257,24 @@ class TelegramScraper:
         return total
 
     async def download_media(self, media_url: str, save_path: str) -> bool:
+        """Скачать медиафайл с правильными заголовками."""
         try:
-            async with self.session.get(media_url) as resp:
+            headers = {
+                "User-Agent": Config.SCRAPER_USER_AGENT,
+                "Referer": "https://t.me/",
+                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+            }
+            async with self.session.get(media_url, headers=headers, timeout=60) as resp:
                 if resp.status == 200:
                     with open(save_path, "wb") as f:
                         f.write(await resp.read())
+                    logger.info(f"✅ Downloaded media to {save_path}")
                     return True
+                else:
+                    logger.warning(f"❌ Failed to download media: HTTP {resp.status} for {media_url}")
         except Exception as e:
-            logger.error(f"Download failed: {e}")
+            logger.error(f"❌ Download media error: {e}")
         return False
