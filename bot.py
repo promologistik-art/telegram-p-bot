@@ -21,7 +21,7 @@ from handlers import (
     set_post_interval_start, set_post_interval_callback,
     set_signature_start, set_signature_input,
     status, project_stats,
-    parse_now, queue_status, post_now, clear_old_queue, clear_failed_queue,
+    parse_now, queue_status, post_now, clear_old_queue, clear_failed_queue, reset_history,
     admin_panel, admin_callback, admin_back_callback,
     admin_set_tariff_start, admin_extend_trial_start,
     broadcast_start, broadcast_send,
@@ -29,8 +29,7 @@ from handlers import (
     setup_bot_commands,
     AWAITING_SOURCE_USERNAME, AWAITING_TARGET_FORWARD, AWAITING_CRITERIA,
     AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE,
-    AWAITING_POST_INTERVAL, AWAITING_TARIFF_SELECT, AWAITING_TARIFF_USERNAME,
-    AWAITING_EXTEND_DAYS, AWAITING_BROADCAST_MESSAGE
+    AWAITING_POST_INTERVAL, AWAITING_TARIFF_SELECT, AWAITING_BROADCAST_MESSAGE
 )
 
 from poster import PosterService
@@ -147,7 +146,7 @@ async def main():
     app.add_handler(CommandHandler("test", test_scraper))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("admin_extend_trial", admin_extend_trial_start))
-    
+    app.add_handler(CommandHandler("reset_history", reset_history))
     # ============ Conversation Handlers (register) ============
     
     app.add_handler(add_source_conv)
