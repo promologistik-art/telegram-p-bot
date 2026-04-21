@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,14 +14,9 @@ from database import AsyncSessionLocal
 from models import User, Project, PostQueue
 from backup import BackupService
 from .utils import is_admin, get_user_projects_count, update_user_limits, TARIFF_LIMITS
-from .constants import AWAITING_TARIFF_USERNAME
+from .constants import AWAITING_TARIFF_SELECT, AWAITING_BROADCAST_MESSAGE
 
 logger = logging.getLogger(__name__)
-
-# Состояния для админских диалогов
-AWAITING_TARIFF_SELECT = 20
-AWAITING_EXTEND_DAYS = 21
-AWAITING_BROADCAST_MESSAGE = 22
 
 
 # ============ АДМИН-ПАНЕЛЬ ============
@@ -89,13 +85,11 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await broadcast_start(query, context)
     elif action.startswith("tariff_set_"):
         tariff = action.replace("tariff_set_", "")
-        await tariff_select_user(query, tariff)
+        await tariff_select_user(query, tariff, context)
     elif action.startswith("user_tariff_"):
         user_id = int(action.replace("user_tariff_", ""))
         tariff = context.user_data.get('selected_tariff')
         await confirm_set_tariff(query, user_id, tariff)
-    elif action == "admin_extend_trial":
-        await extend_trial_start(query)
     elif action.startswith("extend_user_"):
         user_id = int(action.replace("extend_user_", ""))
         await extend_trial_days(query, user_id)
@@ -136,7 +130,6 @@ async def show_admin_users(query):
 # ============ УПРАВЛЕНИЕ ТАРИФАМИ ============
 
 async def show_tariff_menu(query):
-    """Меню управления тарифами."""
     text = (
         "💳 <b>Управление тарифами</b>\n\n"
         "Выберите действие:\n"
@@ -158,7 +151,7 @@ async def show_tariff_menu(query):
 
 
 async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало установки тарифа — показываем выбор тарифа."""
+    """Начало установки тарифа (команда)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Нет доступа")
         return ConversationHandler.END
@@ -178,18 +171,15 @@ async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_T
     return AWAITING_TARIFF_SELECT
 
 
-async def tariff_select_user(query, tariff: str):
+async def tariff_select_user(query, tariff: str, context):
     """После выбора тарифа — показать список пользователей."""
-    context = None  # Будет передаваться через query
+    context.user_data['selected_tariff'] = tariff
     
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).order_by(User.created_at.desc()).limit(30)
         )
         users = result.scalars().all()
-    
-    # Сохраняем выбранный тариф
-    # context.user_data['selected_tariff'] = tariff  # Нужен context
     
     text = f"💎 <b>Выбран тариф: {TARIFF_LIMITS.get(tariff, {}).get('name', tariff)}</b>\n\n"
     text += "Выберите пользователя:\n"
@@ -221,7 +211,6 @@ async def confirm_set_tariff(query, user_id: int, tariff: str):
             await query.edit_message_text("❌ Пользователь не найден")
             return
         
-        # Активируем подписку
         user.subscription_active = True
         user.subscription_ends_at = datetime.utcnow() + timedelta(days=30)
         user.tariff = tariff
@@ -229,7 +218,6 @@ async def confirm_set_tariff(query, user_id: int, tariff: str):
         await update_user_limits(user, tariff)
         await session.commit()
         
-        # Уведомление пользователю
         tariff_name = TARIFF_LIMITS.get(tariff, {}).get('name', tariff)
         try:
             await query.bot.send_message(
@@ -255,8 +243,12 @@ async def confirm_set_tariff(query, user_id: int, tariff: str):
     )
 
 
-async def extend_trial_start(query):
-    """Начало продления триала — показать пользователей."""
+async def admin_extend_trial_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Продлить триал (команда)."""
+    if not await is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Нет доступа")
+        return ConversationHandler.END
+    
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User)
@@ -267,11 +259,8 @@ async def extend_trial_start(query):
         users = result.scalars().all()
     
     if not users:
-        await query.edit_message_text(
-            "📭 Нет пользователей на триале",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")]])
-        )
-        return
+        await update.message.reply_text("📭 Нет пользователей на триале")
+        return ConversationHandler.END
     
     text = "🎁 <b>Продлить триал</b>\n\nВыберите пользователя:\n"
     keyboard = []
@@ -286,9 +275,14 @@ async def extend_trial_start(query):
             )
         ])
     
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
     
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return ConversationHandler.END
 
 
 async def extend_trial_days(query, user_id: int):
@@ -303,7 +297,6 @@ async def extend_trial_days(query, user_id: int):
             await query.edit_message_text("❌ Пользователь не найден")
             return
         
-        # Продлеваем на 7 дней
         if user.trial_ends_at and user.trial_ends_at > datetime.utcnow():
             user.trial_ends_at = user.trial_ends_at + timedelta(days=7)
         else:
@@ -311,7 +304,6 @@ async def extend_trial_days(query, user_id: int):
         
         await session.commit()
         
-        # Уведомление пользователю
         try:
             await query.bot.send_message(
                 chat_id=user_id,
@@ -348,7 +340,7 @@ async def deactivate_user(query, user_id: int):
             return
         
         user.subscription_active = False
-        user.trial_ends_at = datetime.utcnow() - timedelta(days=1)  # Триал закончился
+        user.trial_ends_at = datetime.utcnow() - timedelta(days=1)
         await session.commit()
         
         try:
@@ -516,7 +508,6 @@ async def export_users_excel(query, context):
 
 
 async def send_daily_report(query, context):
-    """Отправить ежедневный отчёт по пользователям."""
     await query.edit_message_text("📊 Формирую отчёт...")
     
     async with AsyncSessionLocal() as session:
@@ -550,7 +541,6 @@ async def send_daily_report(query, context):
         for u, days in trial_ending[:10]:
             text += f"• @{u.username or u.telegram_id} — {days} дн.\n"
     
-    # Создаём Excel файл и отправляем
     wb = Workbook()
     ws = wb.active
     ws.title = "Отчёт"
@@ -654,14 +644,34 @@ async def clear_failed_admin(query):
 
 # ============ РАССЫЛКА ============
 
-async def broadcast_start(query, context):
+async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало рассылки."""
-    await query.edit_message_text(
-        "📢 <b>Рассылка сообщений</b>\n\n"
-        "Отправьте текст сообщения для всех пользователей.\n"
-        "/cancel — отмена",
-        parse_mode="HTML"
-    )
+    # Поддержка как команды, так и callback
+    if hasattr(update, 'callback_query') and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if not await is_admin(update.effective_user.id):
+            await query.edit_message_text("❌ Нет доступа")
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "📢 <b>Рассылка сообщений</b>\n\n"
+            "Отправьте текст сообщения для всех пользователей.\n"
+            "/cancel — отмена",
+            parse_mode="HTML"
+        )
+    else:
+        if not await is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Нет доступа")
+            return ConversationHandler.END
+        
+        await update.message.reply_text(
+            "📢 <b>Рассылка сообщений</b>\n\n"
+            "Отправьте текст сообщения для всех пользователей.\n"
+            "/cancel — отмена",
+            parse_mode="HTML"
+        )
+    
     context.user_data['awaiting_broadcast'] = True
     return AWAITING_BROADCAST_MESSAGE
 
@@ -670,6 +680,10 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправка рассылки."""
     if not context.user_data.get('awaiting_broadcast'):
         return
+    
+    if not await is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Нет доступа")
+        return ConversationHandler.END
     
     text = update.message.text
     
@@ -693,7 +707,7 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to send broadcast to {user.telegram_id}: {e}")
             failed += 1
-        await asyncio.sleep(0.5)  # Задержка чтобы не упереться в лимиты
+        await asyncio.sleep(0.5)
     
     context.user_data['awaiting_broadcast'] = False
     
@@ -709,7 +723,3 @@ async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     await admin_panel(update, context)
-
-
-# Импорт asyncio для рассылки
-import asyncio
