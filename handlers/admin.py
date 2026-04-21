@@ -82,7 +82,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "admin_clear_failed":
         await clear_failed_admin(query)
     elif action == "admin_broadcast":
-        await broadcast_start(query, context)
+        await broadcast_start(update, context)
     elif action.startswith("tariff_set_"):
         tariff = action.replace("tariff_set_", "")
         await tariff_select_user(query, tariff, context)
@@ -99,6 +99,25 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action.startswith("activate_user_"):
         user_id = int(action.replace("activate_user_", ""))
         await activate_user(query, user_id)
+    elif action.startswith("user_manage_"):
+        user_id = int(action.replace("user_manage_", ""))
+        await show_user_manage_menu(query, user_id)
+    elif action == "admin_set_tariff":
+        await tariff_select_menu(query)
+    elif action == "admin_extend_trial":
+        await extend_trial_start(query)
+    elif action == "admin_deactivate":
+        await deactivate_menu(query)
+    elif action == "admin_activate":
+        await activate_menu(query)
+    elif action.startswith("tariff_for_"):
+        user_id = int(action.replace("tariff_for_", ""))
+        await tariff_select_menu_for_user(query, user_id)
+    elif action.startswith("set_tariff_"):
+        parts = action.split("_")
+        user_id = int(parts[2])
+        tariff = parts[3]
+        await confirm_set_tariff(query, user_id, tariff)
 
 
 async def show_admin_users(query):
@@ -114,13 +133,18 @@ async def show_admin_users(query):
     for u in users:
         projects_count = await get_user_projects_count(u.telegram_id)
         status_icon = "🟢" if u.subscription_active else "🟡" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "🔴"
+        display_name = u.full_name or u.username or f"Пользователь"
         
-        text += f"{status_icon} {u.full_name or '—'} (@{u.username or '—'})\n"
+        text += f"{status_icon} {display_name}"
+        if u.username:
+            text += f" (@{u.username})\n"
+        else:
+            text += "\n"
         text += f"  🆔 {u.telegram_id} | 📁 {projects_count} проектов\n"
         text += f"  💳 {TARIFF_LIMITS.get(u.tariff, {}).get('name', '—')}\n\n"
         
         keyboard.append([
-            InlineKeyboardButton(f"⚙️ Управлять @{u.username or u.telegram_id}", callback_data=f"user_manage_{u.telegram_id}")
+            InlineKeyboardButton(f"⚙️ Управлять {display_name[:15]}", callback_data=f"user_manage_{u.telegram_id}")
         ])
     
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
@@ -151,7 +175,6 @@ async def show_tariff_menu(query):
 
 
 async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало установки тарифа (команда)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Нет доступа")
         return ConversationHandler.END
@@ -172,7 +195,6 @@ async def admin_set_tariff_start(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def tariff_select_user(query, tariff: str, context):
-    """После выбора тарифа — показать список пользователей."""
     context.user_data['selected_tariff'] = tariff
     
     async with AsyncSessionLocal() as session:
@@ -187,9 +209,10 @@ async def tariff_select_user(query, tariff: str, context):
     keyboard = []
     for u in users:
         status = "🟢" if u.subscription_active else "🟡"
+        display_name = u.full_name or u.username or f"ID:{u.telegram_id}"
         keyboard.append([
             InlineKeyboardButton(
-                f"{status} {u.full_name or u.username or u.telegram_id}",
+                f"{status} {display_name[:25]}",
                 callback_data=f"user_tariff_{u.telegram_id}"
             )
         ])
@@ -200,7 +223,6 @@ async def tariff_select_user(query, tariff: str, context):
 
 
 async def confirm_set_tariff(query, user_id: int, tariff: str):
-    """Подтверждение и установка тарифа."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == user_id)
@@ -244,7 +266,6 @@ async def confirm_set_tariff(query, user_id: int, tariff: str):
 
 
 async def admin_extend_trial_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Продлить триал (команда)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Нет доступа")
         return ConversationHandler.END
@@ -267,10 +288,11 @@ async def admin_extend_trial_start(update: Update, context: ContextTypes.DEFAULT
     
     for u in users:
         days_left = (u.trial_ends_at - datetime.utcnow()).days if u.trial_ends_at else 0
-        text += f"• @{u.username or u.telegram_id} — осталось {days_left} дн.\n"
+        display_name = u.full_name or u.username or f"ID:{u.telegram_id}"
+        text += f"• {display_name} — осталось {days_left} дн.\n"
         keyboard.append([
             InlineKeyboardButton(
-                f"➕ @{u.username or u.telegram_id}",
+                f"➕ {display_name[:20]}",
                 callback_data=f"extend_user_{u.telegram_id}"
             )
         ])
@@ -286,7 +308,6 @@ async def admin_extend_trial_start(update: Update, context: ContextTypes.DEFAULT
 
 
 async def extend_trial_days(query, user_id: int):
-    """Продлить триал на 7 дней."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == user_id)
@@ -327,8 +348,11 @@ async def extend_trial_days(query, user_id: int):
     )
 
 
+async def extend_trial_start(query):
+    await admin_extend_trial_start(query, None)
+
+
 async def deactivate_user(query, user_id: int):
-    """Деактивировать пользователя."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == user_id)
@@ -359,7 +383,6 @@ async def deactivate_user(query, user_id: int):
 
 
 async def activate_user(query, user_id: int):
-    """Активировать пользователя (включить триал)."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == user_id)
@@ -391,6 +414,131 @@ async def activate_user(query, user_id: int):
         f"🎁 Триал до: {user.trial_ends_at.strftime('%d.%m.%Y')}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+# ============ МЕНЮ УПРАВЛЕНИЯ ПОЛЬЗОВАТЕЛЕМ ============
+
+async def show_user_manage_menu(query, user_id: int):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.telegram_id == user_id))
+        user = result.scalar_one_or_none()
+    
+    if not user:
+        await query.edit_message_text("❌ Пользователь не найден")
+        return
+    
+    status = "🟢" if user.subscription_active else "🟡" if user.trial_ends_at and user.trial_ends_at > datetime.utcnow() else "🔴"
+    tariff_name = TARIFF_LIMITS.get(user.tariff, {}).get('name', user.tariff)
+    display_name = user.full_name or user.username or f"ID:{user.telegram_id}"
+    
+    text = (
+        f"⚙️ <b>Управление пользователем</b>\n\n"
+        f"{status} {display_name}\n"
+        f"🆔 {user.telegram_id}\n"
+        f"💳 Тариф: {tariff_name}\n"
+        f"📅 Триал до: {user.trial_ends_at.strftime('%d.%m.%Y %H:%M') if user.trial_ends_at else '—'}\n\n"
+        f"Выберите действие:"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("💎 Установить тариф", callback_data=f"tariff_for_{user_id}")],
+        [InlineKeyboardButton("🎁 Продлить триал (+7 дн)", callback_data=f"extend_user_{user_id}")],
+    ]
+    
+    if user.subscription_active:
+        keyboard.append([InlineKeyboardButton("❌ Деактивировать", callback_data=f"deactivate_user_{user_id}")])
+    else:
+        keyboard.append([InlineKeyboardButton("✅ Активировать", callback_data=f"activate_user_{user_id}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад к списку", callback_data="admin_users_list")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+async def tariff_select_menu(query):
+    keyboard = [
+        [InlineKeyboardButton("🟡 Базовый (290₽/мес)", callback_data="tariff_set_basic")],
+        [InlineKeyboardButton("🟠 Стандарт (590₽/мес)", callback_data="tariff_set_standard")],
+        [InlineKeyboardButton("🔴 PRO (990₽/мес)", callback_data="tariff_set_pro")],
+        [InlineKeyboardButton("👑 Безлимит (1990₽/мес)", callback_data="tariff_set_unlimited")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")],
+    ]
+    
+    await query.edit_message_text(
+        "💎 <b>Выберите тариф:</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+
+
+async def tariff_select_menu_for_user(query, user_id: int):
+    keyboard = [
+        [InlineKeyboardButton("🟡 Базовый", callback_data=f"set_tariff_{user_id}_basic")],
+        [InlineKeyboardButton("🟠 Стандарт", callback_data=f"set_tariff_{user_id}_standard")],
+        [InlineKeyboardButton("🔴 PRO", callback_data=f"set_tariff_{user_id}_pro")],
+        [InlineKeyboardButton("👑 Безлимит", callback_data=f"set_tariff_{user_id}_unlimited")],
+        [InlineKeyboardButton("◀️ Назад", callback_data=f"user_manage_{user_id}")],
+    ]
+    
+    await query.edit_message_text(
+        f"💎 <b>Выберите тариф для пользователя:</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+
+
+async def deactivate_menu(query):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.subscription_active == True).order_by(User.created_at.desc()).limit(20)
+        )
+        users = result.scalars().all()
+    
+    if not users:
+        await query.edit_message_text(
+            "📭 Нет активных пользователей",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")]])
+        )
+        return
+    
+    text = "❌ <b>Выберите пользователя для деактивации:</b>\n\n"
+    keyboard = []
+    
+    for u in users:
+        display_name = u.full_name or u.username or f"ID:{u.telegram_id}"
+        text += f"• {display_name}\n"
+        keyboard.append([InlineKeyboardButton(f"❌ {display_name[:20]}", callback_data=f"deactivate_user_{u.telegram_id}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+async def activate_menu(query):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.subscription_active == False).order_by(User.created_at.desc()).limit(20)
+        )
+        users = result.scalars().all()
+    
+    if not users:
+        await query.edit_message_text(
+            "📭 Нет неактивных пользователей",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")]])
+        )
+        return
+    
+    text = "✅ <b>Выберите пользователя для активации:</b>\n\n"
+    keyboard = []
+    
+    for u in users:
+        display_name = u.full_name or u.username or f"ID:{u.telegram_id}"
+        text += f"• {display_name}\n"
+        keyboard.append([InlineKeyboardButton(f"✅ {display_name[:20]}", callback_data=f"activate_user_{u.telegram_id}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_tariff_menu")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 
 # ============ БЭКАПЫ ============
@@ -471,11 +619,11 @@ async def export_users_excel(query, context):
         ws.cell(row=row, column=4, value="Да" if u.is_admin else "Нет")
         ws.cell(row=row, column=5, value=tariff_name)
         ws.cell(row=row, column=6, value="Активна" if u.subscription_active else ("Триал" if u.trial_ends_at and u.trial_ends_at > datetime.utcnow() else "Нет"))
-        ws.cell(row=row, column=7, value=u.trial_ends_at.strftime("%d.%m.%Y") if u.trial_ends_at else "")
+        ws.cell(row=row, column=7, value=u.trial_ends_at.strftime("%d.%m.%Y %H:%M") if u.trial_ends_at else "")
         ws.cell(row=row, column=8, value=projects_count)
         ws.cell(row=row, column=9, value=u.posts_parsed_today)
         ws.cell(row=row, column=10, value=u.posts_posted_today)
-        ws.cell(row=row, column=11, value=u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "")
+        ws.cell(row=row, column=11, value=u.created_at.strftime("%d.%m.%Y %H:%M") if u.created_at else "")
     
     for column in ws.columns:
         max_length = 0
@@ -561,9 +709,21 @@ async def send_daily_report(query, context):
         ws.cell(row=row, column=3, value=u.full_name or "")
         ws.cell(row=row, column=4, value=tariff_name)
         ws.cell(row=row, column=5, value="Активна" if u.subscription_active else "Триал")
-        ws.cell(row=row, column=6, value=u.trial_ends_at.strftime("%d.%m.%Y") if u.trial_ends_at else "")
+        ws.cell(row=row, column=6, value=u.trial_ends_at.strftime("%d.%m.%Y %H:%M") if u.trial_ends_at else "")
         ws.cell(row=row, column=7, value=days_left)
         ws.cell(row=row, column=8, value=projects_count)
+    
+    for column in ws.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)
+        ws.column_dimensions[column_letter].width = adjusted_width
     
     output = BytesIO()
     wb.save(output)
@@ -645,8 +805,6 @@ async def clear_failed_admin(query):
 # ============ РАССЫЛКА ============
 
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало рассылки."""
-    # Поддержка как команды, так и callback
     if hasattr(update, 'callback_query') and update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -677,7 +835,6 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправка рассылки."""
     if not context.user_data.get('awaiting_broadcast'):
         return
     

@@ -4,11 +4,40 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from sqlalchemy import select, delete
 from database import AsyncSessionLocal
-from models import Project, PostQueue
+from models import Project, PostQueue, SourceChannel, ParsedPost
 from utils import format_number
 from .utils import require_project, get_sources_count, get_project_target, is_admin
 
 logger = logging.getLogger(__name__)
+
+
+async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сбросить историю спарсенных постов для текущего проекта."""
+    project = await require_project(update, context)
+    
+    if not project:
+        return
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(SourceChannel).where(SourceChannel.project_id == project.id)
+        )
+        sources = result.scalars().all()
+        source_ids = [s.id for s in sources]
+        
+        if source_ids:
+            await session.execute(
+                delete(ParsedPost).where(ParsedPost.source_channel_id.in_(source_ids))
+            )
+            await session.commit()
+            
+            from database import parsed_urls
+            parsed_urls.clear()
+    
+    await update.message.reply_text(
+        f"✅ История спарсенных постов для проекта «{project.name}» очищена.\n"
+        f"Теперь /parse найдёт все посты заново."
+    )
 
 
 async def parse_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -31,16 +60,13 @@ async def parse_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     scheduler = context.application.bot_data.get('scheduler')
     if scheduler:
-        # Сохраняем старую статистику
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(Project).where(Project.id == project.id))
             old_project = result.scalar_one()
             old_parsed = old_project.posts_parsed_today
         
-        # Запускаем парсинг
         await scheduler._process_project(project)
         
-        # Получаем обновлённую статистику
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(Project).where(Project.id == project.id))
             updated = result.scalar_one()
@@ -59,7 +85,7 @@ async def parse_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 Новых постов не найдено\n"
                 f"📊 Всего спарсено сегодня: {updated.posts_parsed_today}\n\n"
                 f"💡 Возможные причины:\n"
-                f"• Все посты уже были спарсены\n"
+                f"• Все посты уже были спарсены — /reset_history\n"
                 f"• Посты не прошли критерии\n"
                 f"• В каналах нет новых постов\n\n"
                 f"/queue — проверить очередь"
@@ -105,7 +131,6 @@ async def queue_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Опубликовать следующий пост из очереди немедленно."""
     project = await require_project(update, context)
     
     if not project:
@@ -154,7 +179,6 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def clear_old_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удалить все pending посты из очереди (админ)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Нет доступа")
         return
@@ -177,7 +201,6 @@ async def clear_old_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def clear_failed_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удалить все failed посты из очереди (админ)."""
     if not await is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Нет доступа")
         return

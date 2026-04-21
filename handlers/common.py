@@ -39,7 +39,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         projects_count = result.scalar()
         has_project = projects_count > 0
     
-    # Уведомление админу о новом юзере
     if is_new_user and user.id != Config.ADMIN_ID:
         try:
             await context.bot.send_message(
@@ -56,13 +55,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to notify admin: {e}")
     
-    # Проверяем доступ
     has_access, access_message, _ = await check_user_access(user.id)
     
     welcome = f"👋 Привет, {user.first_name or 'пользователь'}!\n\n"
     welcome += "Я бот для автоматического парсинга и публикации постов из Telegram-каналов.\n\n"
     
-    # Информация о триале/подписке
     if not db_user.is_admin:
         now = datetime.utcnow()
         tariff_info = TARIFF_LIMITS.get(db_user.tariff, TARIFF_LIMITS["trial"])
@@ -107,7 +104,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Справка по командам."""
     user_id = update.effective_user.id
     
     text = (
@@ -130,31 +126,31 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/parse - запустить парсинг сейчас\n"
         "/queue - очередь публикации\n"
         "/postnow - опубликовать следующий пост немедленно\n"
+        "/reset_history - сбросить историю спарсенных постов\n"
     )
     
     if await is_admin(update.effective_user.id):
-        text += "\n<b>Админские команды:</b>\n"
-        text += "/admin — админ-панель\n"
-        text += "/admin_set_tariff — установить тариф пользователю\n"
-        text += "/admin_extend_trial — продлить триал\n"
-        text += "/broadcast — рассылка сообщений\n"
-        text += "/clear_queue — очистить очередь\n"
-        text += "/clear_failed — очистить failed посты\n"
-    
-    # Добавляем информацию о тарифах для обычных пользователей
-    if not await is_admin(user_id):
+        text += (
+            "\n<b>Админские команды:</b>\n"
+            "/admin — админ-панель\n"
+            "/admin_set_tariff — установить тариф\n"
+            "/admin_extend_trial — продлить триал\n"
+            "/broadcast — рассылка\n"
+            "/clear_queue — очистить очередь\n"
+            "/clear_failed — очистить failed\n"
+        )
+    else:
         text += "\n<b>💎 Тарифы:</b>\n"
-        text += "• Базовый — 290 ₽/мес (1 проект, 3 источника, постинг от 2ч)\n"
-        text += "• Стандарт — 590 ₽/мес (3 проекта, 5 источников, постинг от 1ч)\n"
-        text += "• PRO — 990 ₽/мес (10 проектов, 10 источников, постинг от 30мин)\n"
-        text += "• Безлимит — 1990 ₽/мес\n\n"
-        text += "📲 Для подключения: @admin"
+        text += "• Базовый — 290 ₽/мес\n"
+        text += "• Стандарт — 590 ₽/мес\n"
+        text += "• PRO — 990 ₽/мес\n"
+    
+    text += "\n\n📲 <b>Написать админу:</b> @Zen"
     
     await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отменить текущее действие."""
     context.user_data.clear()
     await update.message.reply_text("❌ Действие отменено")
     return ConversationHandler.END
