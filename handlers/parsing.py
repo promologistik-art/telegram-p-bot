@@ -3,7 +3,7 @@ from datetime import timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 from sqlalchemy import select, delete
-from database import AsyncSessionLocal
+from database import AsyncSessionLocal, clear_parsed_cache
 from models import Project, PostQueue, SourceChannel, ParsedPost
 from utils import format_number
 from .utils import require_project, get_sources_count, get_project_target, is_admin
@@ -19,20 +19,14 @@ async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(SourceChannel).where(SourceChannel.project_id == project.id)
+        # Удаляем все parsed_posts для этого проекта
+        await session.execute(
+            delete(ParsedPost).where(ParsedPost.project_id == project.id)
         )
-        sources = result.scalars().all()
-        source_ids = [s.id for s in sources]
+        await session.commit()
         
-        if source_ids:
-            await session.execute(
-                delete(ParsedPost).where(ParsedPost.source_channel_id.in_(source_ids))
-            )
-            await session.commit()
-            
-            from database import parsed_urls
-            parsed_urls.clear()
+        # Очищаем кэш
+        await clear_parsed_cache()
     
     await update.message.reply_text(
         f"✅ История спарсенных постов для проекта «{project.name}» очищена.\n"
