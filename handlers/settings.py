@@ -2,7 +2,7 @@ import logging
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from sqlalchemy import update as sql_update
+from sqlalchemy import update as sql_update, select
 from database import AsyncSessionLocal
 from models import Project
 from .utils import require_project, check_action_limit, check_user_access
@@ -10,7 +10,7 @@ from .constants import AWAITING_INTERVAL, AWAITING_SIGNATURE, AWAITING_POST_INTE
 
 logger = logging.getLogger(__name__)
 
-# Дополнительное состояние для выбора времени старта
+# Состояние для выбора времени старта
 AWAITING_POST_START_TIME = 17
 
 
@@ -96,7 +96,7 @@ async def set_interval_callback(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
-# ============ НАСТРОЙКА ИНТЕРВАЛА ПУБЛИКАЦИИ (НОВАЯ) ============
+# ============ НАСТРОЙКА ИНТЕРВАЛА ПУБЛИКАЦИИ ============
 
 async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Шаг 1: Выбор интервала между публикациями."""
@@ -115,7 +115,6 @@ async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_
     
     min_interval = user.min_post_interval_minutes if not user.is_admin else 15
     
-    # Только 15, 30, 60 минут
     all_intervals = [15, 30, 60]
     keyboard = []
     for interval in all_intervals:
@@ -166,6 +165,9 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
     if row:
         keyboard.append(row)
     
+    # Добавляем кнопку "Без изменений" на случай, если юзер передумал
+    keyboard.append([InlineKeyboardButton("↩️ Пропустить (оставить текущее)", callback_data=f"starttime_skip")])
+    
     await query.edit_message_text(
         f"📅 <b>Интервал между публикациями</b>\n\n"
         f"Выбран интервал: <b>{minutes} минут</b>\n\n"
@@ -181,6 +183,30 @@ async def set_post_start_time_callback(update: Update, context: ContextTypes.DEF
     """Сохранение интервала и времени старта."""
     query = update.callback_query
     await query.answer()
+    
+    # Если пользователь пропустил выбор времени
+    if query.data == "starttime_skip":
+        minutes = context.user_data.get('temp_post_interval', 30)
+        hours = minutes / 60
+        project_id = context.user_data.get('temp_project_id')
+        
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                sql_update(Project)
+                .where(Project.id == project_id)
+                .values(post_interval_hours=hours)
+            )
+            await session.commit()
+        
+        await query.edit_message_text(
+            f"✅ <b>Интервал обновлён!</b>\n\n"
+            f"📅 Интервал: <b>{minutes} минут</b>\n"
+            f"🕐 Время старта оставлено без изменений."
+        )
+        
+        context.user_data.pop('temp_project_id', None)
+        context.user_data.pop('temp_post_interval', None)
+        return ConversationHandler.END
     
     # Парсим время из callback_data (starttime_H_M)
     parts = query.data.split("_")
@@ -208,7 +234,7 @@ async def set_post_start_time_callback(update: Update, context: ContextTypes.DEF
             .where(Project.id == project_id)
             .values(
                 post_interval_hours=hours,
-                active_hours_start=hour  # Время первой публикации
+                active_hours_start=hour
             )
         )
         await session.commit()
