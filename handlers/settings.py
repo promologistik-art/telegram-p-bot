@@ -189,7 +189,6 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
 
 def extract_username_from_link(link: str) -> str:
     """Извлекает username из ссылки t.me."""
-    # t.me/username или https://t.me/username или @username
     patterns = [
         r'(?:https?://)?t\.me/([a-zA-Z0-9_]+)',
         r'@([a-zA-Z0-9_]+)'
@@ -204,12 +203,6 @@ def extract_username_from_link(link: str) -> str:
 def parse_signature_input(text: str) -> str:
     """
     Парсит ввод пользователя и возвращает HTML-подпись.
-    
-    Форматы:
-    - "Просто текст" -> "Просто текст"
-    - "Текст | https://t.me/username" -> '<a href="https://t.me/username">Текст</a>'
-    - "https://t.me/username" -> '<a href="https://t.me/username">@username</a>'
-    - "Сделано в https://t.me/username" -> 'Сделано в <a href="https://t.me/username">@username</a>'
     """
     text = text.strip()
     
@@ -225,13 +218,13 @@ def parse_signature_input(text: str) -> str:
             
             username = extract_username_from_link(link)
             if username:
-                # Если в тексте уже есть @username, не дублируем
+                # Если в тексте уже есть этот @username, не дублируем
                 if f"@{username}" not in label:
                     label = f"{label} @{username}"
             
             return f'<a href="{link}">{label}</a>'
     
-    # Ищем все ссылки t.me в тексте и заменяем на красивый формат
+    # Ищем ссылки t.me в тексте и заменяем на красивый формат
     def replace_link(match):
         full_link = match.group(0)
         username = extract_username_from_link(full_link)
@@ -239,23 +232,25 @@ def parse_signature_input(text: str) -> str:
             return f'<a href="{full_link}">@{username}</a>'
         return full_link
     
-    # Заменяем все найденные t.me ссылки
     link_pattern = r'(?:https?://)?t\.me/[a-zA-Z0-9_]+'
     if re.search(link_pattern, text):
         text = re.sub(link_pattern, replace_link, text)
         return text
     
-    # Проверяем, является ли ввод просто username (@username)
-    username_match = re.match(r'^@([a-zA-Z0-9_]+)$', text)
-    if username_match:
-        username = username_match.group(1)
-        link = f"https://t.me/{username}"
-        return f'<a href="{link}">@{username}</a>'
+    # Ищем @username в тексте и делаем его кликабельным, сохраняя остальной текст
+    username_pattern = r'@([a-zA-Z0-9_]+)'
+    if re.search(username_pattern, text):
+        def make_username_clickable(match):
+            username = match.group(1)
+            link = f"https://t.me/{username}"
+            return f'<a href="{link}">@{username}</a>'
+        
+        text = re.sub(username_pattern, make_username_clickable, text)
+        return text
     
-    # Проверяем, является ли это просто ссылка без текста
+    # Проверяем, является ли ввод просто ссылкой без текста
     username = extract_username_from_link(text)
     if username:
-        # Формируем полную ссылку
         if text.startswith("http"):
             link = text
         else:
@@ -266,6 +261,18 @@ def parse_signature_input(text: str) -> str:
     return text
 
 
+def get_display_text(html_text: str) -> str:
+    """
+    Преобразует HTML-подпись в читаемый вид для предпросмотра.
+    <a href="...">@username</a> -> @username
+    """
+    # Заменяем HTML-ссылки на просто текст
+    text = re.sub(r'<a[^>]*>([^<]*)</a>', r'\1', html_text)
+    # Убираем остальные HTML-теги
+    text = re.sub(r'<[^>]+>', '', text)
+    return text
+
+
 async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало настройки подписи."""
     project = await require_project(update, context)
@@ -273,22 +280,22 @@ async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     
     current = project.signature or "не установлена"
-    # Экранируем HTML для отображения
-    current_display = current.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    current_display = get_display_text(current) if current != "не установлена" else current
     
     context.user_data['temp_project_id'] = project.id
     
     await update.message.reply_text(
         f"✍️ <b>Подпись проекта «{project.name}»</b>\n\n"
-        f"<b>Текущая подпись:</b>\n{current_display}\n\n"
+        f"<b>Текущая подпись:</b> {current_display}\n\n"
         f"<b>Введите подпись:</b>\n\n"
         f"📝 <b>Просто текст:</b>\n"
         f"   <code>Мой канал</code>\n\n"
         f"🔗 <b>Текст + ссылка (через | ):</b>\n"
         f"   <code>Мой канал | https://t.me/username</code>\n\n"
-        f"🔗 <b>Текст со ссылкой внутри:</b>\n"
+        f"🔗 <b>Текст со ссылкой или @username:</b>\n"
         f"   <code>Сделано в https://t.me/username</code>\n"
-        f"   <i>Бот сам заменит ссылку на красивый @username</i>\n\n"
+        f"   <code>Сделано в @username</code>\n"
+        f"   <i>Бот сам сделает ссылку кликабельной</i>\n\n"
         f"🔗 <b>Только ссылка:</b>\n"
         f"   <code>https://t.me/username</code>\n\n"
         f"Отправьте <code>удалить</code> чтобы убрать подпись.\n"
@@ -307,13 +314,12 @@ async def set_signature_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         signature = None
         reply = "✅ Подпись удалена"
     else:
-        # Парсим ввод и создаём HTML-подпись
         signature = parse_signature_input(text)
+        display_text = get_display_text(signature)
         
-        # Экранируем для отображения
-        display_text = signature.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         reply = (
-            f"✅ <b>Подпись установлена:</b>\n\n"
+            f"✅ <b>Подпись установлена!</b>\n\n"
+            f"<b>В посте будет выглядеть так:</b>\n"
             f"{display_text}\n\n"
             f"💡 Подпись будет добавляться в конце каждого поста."
         )
