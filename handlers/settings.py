@@ -1,4 +1,5 @@
 import logging
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from sqlalchemy import update as sql_update
@@ -184,31 +185,82 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
     return ConversationHandler.END
 
 
+# ============ НАСТРОЙКА ПОДПИСИ (УПРОЩЁННАЯ) ============
+
+def parse_signature_input(text: str) -> str:
+    """
+    Парсит ввод пользователя и возвращает HTML-подпись.
+    
+    Форматы:
+    - "Просто текст" -> "Просто текст"
+    - "Текст | https://t.me/username" -> '<a href="https://t.me/username">Текст</a>'
+    - "https://t.me/username" -> '<a href="https://t.me/username">@username</a>'
+    """
+    text = text.strip()
+    
+    # Проверяем формат "Текст | ссылка"
+    if "|" in text:
+        parts = text.split("|", 1)
+        label = parts[0].strip()
+        link = parts[1].strip()
+        
+        if link:
+            # Если ссылка без https://, добавляем
+            if not link.startswith("http"):
+                link = "https://" + link
+            
+            return f'<a href="{link}">{label}</a>'
+    
+    # Проверяем, является ли ввод просто ссылкой
+    link_pattern = r'^(https?://)?(t\.me/|@)?([a-zA-Z0-9_]+)$'
+    match = re.match(link_pattern, text)
+    if match:
+        username = match.group(3)
+        # Формируем полную ссылку
+        if text.startswith("http"):
+            link = text
+        else:
+            link = f"https://t.me/{username}"
+        
+        return f'<a href="{link}">@{username}</a>'
+    
+    # Проверяем, является ли это полной ссылкой на канал
+    url_pattern = r'^https?://t\.me/([a-zA-Z0-9_]+)$'
+    match = re.match(url_pattern, text)
+    if match:
+        username = match.group(1)
+        return f'<a href="{text}">@{username}</a>'
+    
+    # Если ничего не подошло — возвращаем как простой текст
+    return text
+
+
 async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Настройка подписи проекта."""
+    """Начало настройки подписи."""
     project = await require_project(update, context)
     if not project:
         return ConversationHandler.END
     
     current = project.signature or "не установлена"
+    # Экранируем HTML для отображения
     current_display = current.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    context.user_data['temp_project_id'] = project.id
     
     await update.message.reply_text(
         f"✍️ <b>Подпись проекта «{project.name}»</b>\n\n"
         f"<b>Текущая подпись:</b>\n{current_display}\n\n"
-        f"Отправьте текст подписи (или /cancel для отмены):\n\n"
-        f"💡 <b>Подпись будет добавляться в конце каждого поста.</b>\n"
-        f"Отправьте <code>удалить</code> чтобы убрать подпись.\n\n"
-        f"🔗 <b>Кликабельные ссылки (HTML):</b>\n"
-        f"• <code>&lt;a href='https://t.me/username'&gt;Текст&lt;/a&gt;</code> — ссылка на канал\n"
-        f"• <code>&lt;a href='https://site.com'&gt;Текст&lt;/a&gt;</code> — ссылка на сайт\n"
-        f"• <code>@username</code> — упоминание\n\n"
-        f"📝 <b>Примеры:</b>\n"
-        f"<code>Сделано в &lt;a href='https://t.me/simpleparcer_bot'&gt;@simpleparcer_bot&lt;/a&gt;</code>\n"
-        f"<code>Подпишись на &lt;a href='https://t.me/my_channel'&gt;наш канал&lt;/a&gt;</code>",
+        f"<b>Введите подпись:</b>\n\n"
+        f"📝 <b>Просто текст:</b>\n"
+        f"   <code>Мой канал</code>\n\n"
+        f"🔗 <b>Текст + ссылка (через | ):</b>\n"
+        f"   <code>Мой канал | https://t.me/username</code>\n\n"
+        f"🔗 <b>Только ссылка:</b>\n"
+        f"   <code>https://t.me/username</code>\n\n"
+        f"Отправьте <code>удалить</code> чтобы убрать подпись.\n"
+        f"/cancel — отмена",
         parse_mode="HTML"
     )
-    context.user_data['temp_project_id'] = project.id
     return AWAITING_SIGNATURE
 
 
@@ -221,12 +273,15 @@ async def set_signature_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         signature = None
         reply = "✅ Подпись удалена"
     else:
-        signature = text[:500]
+        # Парсим ввод и создаём HTML-подпись
+        signature = parse_signature_input(text)
+        
+        # Экранируем для отображения
         display_text = signature.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         reply = (
             f"✅ <b>Подпись установлена:</b>\n\n"
             f"{display_text}\n\n"
-            f"💡 Подпись будет добавляться в конце каждого поста с поддержкой HTML-форматирования."
+            f"💡 Подпись будет добавляться в конце каждого поста."
         )
     
     async with AsyncSessionLocal() as session:
