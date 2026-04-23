@@ -10,6 +10,9 @@ from .constants import AWAITING_INTERVAL, AWAITING_SIGNATURE, AWAITING_POST_INTE
 
 logger = logging.getLogger(__name__)
 
+# Дополнительное состояние для выбора времени старта
+AWAITING_POST_START_TIME = 17
+
 
 async def set_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Настройка интервала парсинга."""
@@ -93,8 +96,10 @@ async def set_interval_callback(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+# ============ НАСТРОЙКА ИНТЕРВАЛА ПУБЛИКАЦИИ (НОВАЯ) ============
+
 async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Настройка интервала между публикациями."""
+    """Шаг 1: Выбор интервала между публикациями."""
     project = await require_project(update, context)
     
     if not project:
@@ -108,40 +113,25 @@ async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_
     
     context.user_data['temp_project_id'] = project.id
     
-    min_interval = user.min_post_interval_minutes if not user.is_admin else 30
+    min_interval = user.min_post_interval_minutes if not user.is_admin else 15
     
-    all_intervals = [30, 60, 120, 180, 360, 720]
+    # Только 15, 30, 60 минут
+    all_intervals = [15, 30, 60]
     keyboard = []
-    row = []
     for interval in all_intervals:
         if interval >= min_interval or user.is_admin:
-            if interval < 60:
-                text = f"🕐 {interval} минут"
-            else:
-                hours = interval // 60
-                text = f"🕑 {hours} час"
-                if hours in [2, 3, 4]:
-                    text += "а"
-                elif hours > 4:
-                    text += "ов"
-            row.append(InlineKeyboardButton(text, callback_data=f"post_{interval}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-    if row:
-        keyboard.append(row)
+            text = f"🕐 {interval} минут"
+            keyboard.append([InlineKeyboardButton(text, callback_data=f"post_{interval}")])
     
-    current_hours = project.post_interval_hours
-    current_minutes = int(current_hours * 60)
-    current_text = f"{current_minutes} минут" if current_minutes < 60 else f"{int(current_hours)} час(ов)"
+    current_minutes = int(project.post_interval_hours * 60)
+    current_text = f"{current_minutes} минут"
     
     await update.message.reply_text(
         f"📅 <b>Интервал между публикациями</b>\n\n"
         f"Проект: {project.name}\n"
-        f"Текущий: {current_text}\n"
+        f"Текущий интервал: {current_text}\n"
         f"Минимальный для вашего тарифа: {min_interval} мин\n\n"
-        f"Выберите новый интервал:\n"
-        f"💡 Посты будут выходить с указанным интервалом в активные часы.",
+        f"<b>Шаг 1 из 2:</b> Выберите интервал:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -149,11 +139,55 @@ async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение интервала между публикациями."""
+    """Шаг 2: Выбор времени первой публикации."""
     query = update.callback_query
     await query.answer()
     
     minutes = int(query.data.replace("post_", ""))
+    context.user_data['temp_post_interval'] = minutes
+    
+    project_id = context.user_data.get('temp_project_id')
+    
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one()
+    
+    # Формируем кнопки для выбора времени (с 8:00 до 22:00 с шагом 30 минут)
+    keyboard = []
+    row = []
+    for hour in range(project.active_hours_start, project.active_hours_end):
+        for minute in [0, 30]:
+            time_str = f"{hour:02d}:{minute:02d}"
+            callback_data = f"starttime_{hour}_{minute}"
+            row.append(InlineKeyboardButton(time_str, callback_data=callback_data))
+            if len(row) == 4:
+                keyboard.append(row)
+                row = []
+    if row:
+        keyboard.append(row)
+    
+    await query.edit_message_text(
+        f"📅 <b>Интервал между публикациями</b>\n\n"
+        f"Выбран интервал: <b>{minutes} минут</b>\n\n"
+        f"<b>Шаг 2 из 2:</b> Выберите время первой публикации:\n"
+        f"💡 Посты будут выходить в это время и далее с интервалом {minutes} мин.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return AWAITING_POST_START_TIME
+
+
+async def set_post_start_time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение интервала и времени старта."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсим время из callback_data (starttime_H_M)
+    parts = query.data.split("_")
+    hour = int(parts[1])
+    minute = int(parts[2])
+    
+    minutes = context.user_data.get('temp_post_interval', 30)
     hours = minutes / 60
     project_id = context.user_data.get('temp_project_id')
     
@@ -172,23 +206,29 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
         await session.execute(
             sql_update(Project)
             .where(Project.id == project_id)
-            .values(post_interval_hours=hours)
+            .values(
+                post_interval_hours=hours,
+                active_hours_start=hour  # Время первой публикации
+            )
         )
         await session.commit()
     
-    time_text = f"{minutes} минут" if minutes < 60 else f"{int(hours)} час(ов)"
+    time_str = f"{hour:02d}:{minute:02d}"
     await query.edit_message_text(
-        f"✅ Интервал публикации: {time_text}\n\n"
-        f"💡 Посты будут выходить каждые {time_text} в активные часы."
+        f"✅ <b>Настройки сохранены!</b>\n\n"
+        f"📅 Интервал: <b>{minutes} минут</b>\n"
+        f"🕐 Первая публикация в: <b>{time_str}</b>\n\n"
+        f"💡 Бот будет публиковать посты в {time_str} и далее каждые {minutes} минут."
     )
+    
     context.user_data.pop('temp_project_id', None)
+    context.user_data.pop('temp_post_interval', None)
     return ConversationHandler.END
 
 
 # ============ НАСТРОЙКА ПОДПИСИ ============
 
 def extract_username_from_link(link: str) -> str:
-    """Извлекает username из ссылки t.me."""
     patterns = [
         r'(?:https?://)?t\.me/([a-zA-Z0-9_]+)',
         r'@([a-zA-Z0-9_]+)'
@@ -201,12 +241,8 @@ def extract_username_from_link(link: str) -> str:
 
 
 def parse_signature_input(text: str) -> str:
-    """
-    Парсит ввод пользователя и возвращает HTML-подпись.
-    """
     text = text.strip()
     
-    # Формат "Текст | ссылка"
     if "|" in text:
         parts = text.split("|", 1)
         label = parts[0].strip()
@@ -218,13 +254,11 @@ def parse_signature_input(text: str) -> str:
             
             username = extract_username_from_link(link)
             if username:
-                # Если в тексте уже есть этот @username, не дублируем
                 if f"@{username}" not in label:
                     label = f"{label} @{username}"
             
             return f'<a href="{link}">{label}</a>'
     
-    # Ищем ссылки t.me в тексте и заменяем на красивый формат
     def replace_link(match):
         full_link = match.group(0)
         username = extract_username_from_link(full_link)
@@ -237,7 +271,6 @@ def parse_signature_input(text: str) -> str:
         text = re.sub(link_pattern, replace_link, text)
         return text
     
-    # Ищем @username в тексте и делаем его кликабельным, сохраняя остальной текст
     username_pattern = r'@([a-zA-Z0-9_]+)'
     if re.search(username_pattern, text):
         def make_username_clickable(match):
@@ -248,7 +281,6 @@ def parse_signature_input(text: str) -> str:
         text = re.sub(username_pattern, make_username_clickable, text)
         return text
     
-    # Проверяем, является ли ввод просто ссылкой без текста
     username = extract_username_from_link(text)
     if username:
         if text.startswith("http"):
@@ -257,24 +289,16 @@ def parse_signature_input(text: str) -> str:
             link = f"https://t.me/{username}"
         return f'<a href="{link}">@{username}</a>'
     
-    # Если ничего не подошло — возвращаем как простой текст
     return text
 
 
 def get_display_text(html_text: str) -> str:
-    """
-    Преобразует HTML-подпись в читаемый вид для предпросмотра.
-    <a href="...">@username</a> -> @username
-    """
-    # Заменяем HTML-ссылки на просто текст
     text = re.sub(r'<a[^>]*>([^<]*)</a>', r'\1', html_text)
-    # Убираем остальные HTML-теги
     text = re.sub(r'<[^>]+>', '', text)
     return text
 
 
 async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало настройки подписи."""
     project = await require_project(update, context)
     if not project:
         return ConversationHandler.END
@@ -306,7 +330,6 @@ async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def set_signature_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение подписи."""
     text = update.message.text.strip()
     project_id = context.user_data.get('temp_project_id')
     

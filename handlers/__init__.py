@@ -1,8 +1,8 @@
 from .constants import (
     AWAITING_SOURCE_USERNAME, AWAITING_TARGET_FORWARD, AWAITING_CRITERIA,
     AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE,
-    AWAITING_POST_INTERVAL, AWAITING_TARIFF_SELECT, AWAITING_TARIFF_USERNAME,
-    AWAITING_EXTEND_DAYS, AWAITING_BROADCAST_MESSAGE
+    AWAITING_POST_INTERVAL, AWAITING_POST_START_TIME,
+    AWAITING_TARIFF_SELECT, AWAITING_BROADCAST_MESSAGE
 )
 
 from .common import start, help_command, cancel
@@ -21,6 +21,7 @@ from .targets import (
 from .settings import (
     set_interval_start, set_interval_callback,
     set_post_interval_start, set_post_interval_callback,
+    set_post_start_time_callback,
     set_signature_start, set_signature_input
 )
 from .stats import status, project_stats
