@@ -17,7 +17,6 @@ async def set_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not project:
         return ConversationHandler.END
     
-    # Проверяем доступ
     telegram_id = update.effective_user.id
     has_access, message, user = await check_user_access(telegram_id)
     if not has_access:
@@ -26,10 +25,8 @@ async def set_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     context.user_data['temp_project_id'] = project.id
     
-    # Минимальный интервал из тарифа
     min_interval = user.min_check_interval_minutes if not user.is_admin else 30
     
-    # Формируем кнопки с учётом лимитов
     all_intervals = [30, 60, 120, 180, 360, 720]
     keyboard = []
     row = []
@@ -71,7 +68,6 @@ async def set_interval_callback(update: Update, context: ContextTypes.DEFAULT_TY
     interval = int(query.data.replace("interval_", ""))
     project_id = context.user_data.get('temp_project_id')
     
-    # Проверяем лимит
     telegram_id = update.effective_user.id
     has_access, message, user = await check_user_access(telegram_id)
     if not has_access:
@@ -103,7 +99,6 @@ async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_
     if not project:
         return ConversationHandler.END
     
-    # Проверяем доступ
     telegram_id = update.effective_user.id
     has_access, message, user = await check_user_access(telegram_id)
     if not has_access:
@@ -112,10 +107,8 @@ async def set_post_interval_start(update: Update, context: ContextTypes.DEFAULT_
     
     context.user_data['temp_project_id'] = project.id
     
-    # Минимальный интервал из тарифа
     min_interval = user.min_post_interval_minutes if not user.is_admin else 30
     
-    # Формируем кнопки
     all_intervals = [30, 60, 120, 180, 360, 720]
     keyboard = []
     row = []
@@ -163,7 +156,6 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
     hours = minutes / 60
     project_id = context.user_data.get('temp_project_id')
     
-    # Проверяем лимит
     telegram_id = update.effective_user.id
     has_access, message, user = await check_user_access(telegram_id)
     if not has_access:
@@ -207,15 +199,13 @@ async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"Отправьте текст подписи (или /cancel для отмены):\n\n"
         f"💡 <b>Подпись будет добавляться в конце каждого поста.</b>\n"
         f"Отправьте <code>удалить</code> чтобы убрать подпись.\n\n"
-        f"🔗 <b>Кликабельные ссылки (Markdown):</b>\n"
-        f"• <code>[Текст](https://t.me/username)</code> — ссылка на канал\n"
-        f"• <code>@username</code> — упоминание\n"
-        f"• <code>[Текст](https://site.com)</code> — ссылка на сайт\n"
-        f"• <b>Жирный</b> — <code>*жирный*</code>\n"
-        f"• <i>Курсив</i> — <code>_курсив_</code>\n"
-        f"• <code>моноширинный</code> — <code>`моноширинный`</code>\n\n"
-        f"📝 <b>Пример:</b>\n"
-        f"<code>👉 [📢 Подпишись](https://t.me/my_channel) | *Важно!*</code>",
+        f"🔗 <b>Кликабельные ссылки (HTML):</b>\n"
+        f"• <code>&lt;a href='https://t.me/username'&gt;Текст&lt;/a&gt;</code> — ссылка на канал\n"
+        f"• <code>&lt;a href='https://site.com'&gt;Текст&lt;/a&gt;</code> — ссылка на сайт\n"
+        f"• <code>@username</code> — упоминание\n\n"
+        f"📝 <b>Примеры:</b>\n"
+        f"<code>Сделано в &lt;a href='https://t.me/simpleparcer_bot'&gt;@simpleparcer_bot&lt;/a&gt;</code>\n"
+        f"<code>Подпишись на &lt;a href='https://t.me/my_channel'&gt;наш канал&lt;/a&gt;</code>",
         parse_mode="HTML"
     )
     context.user_data['temp_project_id'] = project.id
@@ -236,7 +226,7 @@ async def set_signature_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply = (
             f"✅ <b>Подпись установлена:</b>\n\n"
             f"{display_text}\n\n"
-            f"💡 Подпись будет добавляться в конце каждого поста с поддержкой Markdown."
+            f"💡 Подпись будет добавляться в конце каждого поста с поддержкой HTML-форматирования."
         )
     
     async with AsyncSessionLocal() as session:
