@@ -10,7 +10,6 @@ from .constants import AWAITING_INTERVAL, AWAITING_SIGNATURE, AWAITING_POST_INTE
 
 logger = logging.getLogger(__name__)
 
-# Состояние для выбора времени старта
 AWAITING_POST_START_TIME = 17
 
 
@@ -151,11 +150,13 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
         result = await session.execute(select(Project).where(Project.id == project_id))
         project = result.scalar_one()
     
-    # Формируем кнопки для выбора времени (с 8:00 до 22:00 с шагом 30 минут)
+    # Кнопки времени с 6:00 до 23:30 с шагом 30 минут
     keyboard = []
     row = []
-    for hour in range(project.active_hours_start, project.active_hours_end):
+    for hour in range(6, 24):
         for minute in [0, 30]:
+            if hour == 23 and minute == 30:
+                break  # 23:30 — последний слот
             time_str = f"{hour:02d}:{minute:02d}"
             callback_data = f"starttime_{hour}_{minute}"
             row.append(InlineKeyboardButton(time_str, callback_data=callback_data))
@@ -165,14 +166,17 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
     if row:
         keyboard.append(row)
     
-    # Добавляем кнопку "Без изменений" на случай, если юзер передумал
-    keyboard.append([InlineKeyboardButton("↩️ Пропустить (оставить текущее)", callback_data=f"starttime_skip")])
+    # Кнопки внизу
+    keyboard.append([InlineKeyboardButton("🌙 Круглосуточно", callback_data="starttime_24_7")])
+    keyboard.append([InlineKeyboardButton("↩️ Оставить текущее", callback_data="starttime_skip")])
     
     await query.edit_message_text(
         f"📅 <b>Интервал между публикациями</b>\n\n"
         f"Выбран интервал: <b>{minutes} минут</b>\n\n"
-        f"<b>Шаг 2 из 2:</b> Выберите время первой публикации:\n"
-        f"💡 Посты будут выходить в это время и далее с интервалом {minutes} мин.",
+        f"<b>Шаг 2 из 2:</b> Выберите время первой публикации\n"
+        f"или нажмите «Круглосуточно»:\n\n"
+        f"💡 Посты будут выходить с выбранного времени\n"
+        f"каждые {minutes} минут.",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -183,35 +187,6 @@ async def set_post_start_time_callback(update: Update, context: ContextTypes.DEF
     """Сохранение интервала и времени старта."""
     query = update.callback_query
     await query.answer()
-    
-    # Если пользователь пропустил выбор времени
-    if query.data == "starttime_skip":
-        minutes = context.user_data.get('temp_post_interval', 30)
-        hours = minutes / 60
-        project_id = context.user_data.get('temp_project_id')
-        
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                sql_update(Project)
-                .where(Project.id == project_id)
-                .values(post_interval_hours=hours)
-            )
-            await session.commit()
-        
-        await query.edit_message_text(
-            f"✅ <b>Интервал обновлён!</b>\n\n"
-            f"📅 Интервал: <b>{minutes} минут</b>\n"
-            f"🕐 Время старта оставлено без изменений."
-        )
-        
-        context.user_data.pop('temp_project_id', None)
-        context.user_data.pop('temp_post_interval', None)
-        return ConversationHandler.END
-    
-    # Парсим время из callback_data (starttime_H_M)
-    parts = query.data.split("_")
-    hour = int(parts[1])
-    minute = int(parts[2])
     
     minutes = context.user_data.get('temp_post_interval', 30)
     hours = minutes / 60
@@ -228,23 +203,75 @@ async def set_post_start_time_callback(update: Update, context: ContextTypes.DEF
         await query.edit_message_text(f"❌ {limit_msg}")
         return ConversationHandler.END
     
+    # Если пропустил выбор времени
+    if query.data == "starttime_skip":
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                sql_update(Project)
+                .where(Project.id == project_id)
+                .values(post_interval_hours=hours)
+            )
+            await session.commit()
+        
+        await query.edit_message_text(
+            f"✅ Интервал обновлён: <b>{minutes} минут</b>\n"
+            f"🕐 Время старта без изменений.",
+            parse_mode="HTML"
+        )
+        
+        context.user_data.pop('temp_project_id', None)
+        context.user_data.pop('temp_post_interval', None)
+        return ConversationHandler.END
+    
+    # Если выбрано "Круглосуточно"
+    if query.data == "starttime_24_7":
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                sql_update(Project)
+                .where(Project.id == project_id)
+                .values(
+                    post_interval_hours=hours,
+                    active_hours_start=0,
+                    active_hours_end=24
+                )
+            )
+            await session.commit()
+        
+        await query.edit_message_text(
+            f"✅ Интервал: <b>{minutes} минут</b>\n"
+            f"🌙 Режим: <b>круглосуточно</b>\n\n"
+            f"💡 Бот будет публиковать посты 24/7 каждые {minutes} минут.",
+            parse_mode="HTML"
+        )
+        
+        context.user_data.pop('temp_project_id', None)
+        context.user_data.pop('temp_post_interval', None)
+        return ConversationHandler.END
+    
+    # Парсим время из callback_data (starttime_H_M)
+    parts = query.data.split("_")
+    hour = int(parts[1])
+    minute = int(parts[2])
+    
     async with AsyncSessionLocal() as session:
         await session.execute(
             sql_update(Project)
             .where(Project.id == project_id)
             .values(
                 post_interval_hours=hours,
-                active_hours_start=hour
+                active_hours_start=hour,
+                active_hours_end=23
             )
         )
         await session.commit()
     
     time_str = f"{hour:02d}:{minute:02d}"
     await query.edit_message_text(
-        f"✅ <b>Настройки сохранены!</b>\n\n"
-        f"📅 Интервал: <b>{minutes} минут</b>\n"
+        f"✅ Интервал: <b>{minutes} минут</b>\n"
         f"🕐 Первая публикация в: <b>{time_str}</b>\n\n"
-        f"💡 Бот будет публиковать посты в {time_str} и далее каждые {minutes} минут."
+        f"💡 Бот будет публиковать посты в {time_str} и далее\n"
+        f"каждые {minutes} минут до 23:00.",
+        parse_mode="HTML"
     )
     
     context.user_data.pop('temp_project_id', None)
