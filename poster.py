@@ -46,6 +46,8 @@ class PosterService:
         async with self.rate_limit:
             try:
                 post_data = queue_item.post_data
+                
+                # Очищаем текст поста
                 caption = clean_caption(post_data.get("text", ""))
                 
                 # Получаем подпись проекта
@@ -56,7 +58,7 @@ class PosterService:
                     project = result.scalar_one_or_none()
                     signature = project.signature if project else None
                 
-                # Добавляем подпись проекта
+                # Добавляем подпись проекта (если есть)
                 if signature:
                     if caption:
                         caption += f"\n\n{signature}"
@@ -75,6 +77,12 @@ class PosterService:
                 media_path = post_data.get("media_path")
                 media_type = post_data.get("media_type")
                 
+                # Определяем parse_mode: HTML если есть <a href> или другие HTML-теги, иначе без форматирования
+                # Markdown не используем, так как он конфликтует с медиа
+                parse_mode = None
+                if caption and ("<a href=" in caption or "<b>" in caption or "<i>" in caption or "<code>" in caption):
+                    parse_mode = "HTML"
+                
                 if media_path and os.path.exists(media_path):
                     try:
                         with open(media_path, "rb") as f:
@@ -83,23 +91,24 @@ class PosterService:
                                     chat_id=queue_item.target_channel_id,
                                     photo=f,
                                     caption=caption if caption else None,
-                                    parse_mode="Markdown"
+                                    parse_mode=parse_mode
                                 )
                             elif media_type == "video":
                                 await self.bot.send_video(
                                     chat_id=queue_item.target_channel_id,
                                     video=f,
                                     caption=caption if caption else None,
-                                    parse_mode="Markdown"
+                                    parse_mode=parse_mode
                                 )
                             else:
                                 await self.bot.send_document(
                                     chat_id=queue_item.target_channel_id,
                                     document=f,
                                     caption=caption if caption else None,
-                                    parse_mode="Markdown"
+                                    parse_mode=parse_mode
                                 )
                         
+                        # Удаляем временный файл
                         try:
                             os.remove(media_path)
                         except:
@@ -111,16 +120,52 @@ class PosterService:
                         
                     except Exception as e:
                         logger.error(f"Failed to send media: {e}")
+                        
+                        # Если ошибка из-за parse_mode, пробуем без него
+                        if parse_mode and "parse" in str(e).lower():
+                            try:
+                                with open(media_path, "rb") as f:
+                                    if media_type == "photo":
+                                        await self.bot.send_photo(
+                                            chat_id=queue_item.target_channel_id,
+                                            photo=f,
+                                            caption=caption if caption else None
+                                        )
+                                    elif media_type == "video":
+                                        await self.bot.send_video(
+                                            chat_id=queue_item.target_channel_id,
+                                            video=f,
+                                            caption=caption if caption else None
+                                        )
+                                    else:
+                                        await self.bot.send_document(
+                                            chat_id=queue_item.target_channel_id,
+                                            document=f,
+                                            caption=caption if caption else None
+                                        )
+                                
+                                try:
+                                    os.remove(media_path)
+                                except:
+                                    pass
+                                
+                                await self._mark_published(queue_item)
+                                logger.info(f"✅ Published post {queue_item.id} with media (no parse_mode)")
+                                return True
+                            except Exception as e2:
+                                logger.error(f"Failed to send media without parse_mode: {e2}")
+                        
+                        # Пробуем отправить хотя бы текст
                         if caption:
                             try:
                                 await self.bot.send_message(
                                     chat_id=queue_item.target_channel_id,
                                     text=caption,
-                                    parse_mode="Markdown",
+                                    parse_mode=parse_mode,
                                     disable_web_page_preview=True
                                 )
                                 await self._mark_published(queue_item)
-                                logger.info(f"✅ Published post {queue_item.id} (text only)")
+                                logger.info(f"✅ Published post {queue_item.id} (text only after media fail)")
                                 return True
                             except:
                                 try:
@@ -137,33 +182,36 @@ class PosterService:
                         raise e
                         
                 elif caption:
+                    # Только текст, без медиа
                     try:
                         await self.bot.send_message(
                             chat_id=queue_item.target_channel_id,
                             text=caption,
-                            parse_mode="Markdown",
+                            parse_mode=parse_mode,
                             disable_web_page_preview=True
                         )
                         await self._mark_published(queue_item)
                         logger.info(f"✅ Published post {queue_item.id} (text only)")
                         return True
-                    except:
-                        try:
-                            await self.bot.send_message(
-                                chat_id=queue_item.target_channel_id,
-                                text=caption,
-                                disable_web_page_preview=True
-                            )
-                            await self._mark_published(queue_item)
-                            logger.info(f"✅ Published post {queue_item.id} (text only, no parse)")
-                            return True
-                        except Exception as msg_e:
-                            logger.error(f"Failed to send text: {msg_e}")
-                            raise msg_e
+                    except Exception as e:
+                        # Пробуем без форматирования
+                        if parse_mode:
+                            try:
+                                await self.bot.send_message(
+                                    chat_id=queue_item.target_channel_id,
+                                    text=caption,
+                                    disable_web_page_preview=True
+                                )
+                                await self._mark_published(queue_item)
+                                logger.info(f"✅ Published post {queue_item.id} (text only, no parse)")
+                                return True
+                            except:
+                                pass
+                        raise e
                     
                 else:
                     logger.warning(f"⚠️ Empty post {queue_item.id}, marking as failed")
-                    await self._mark_failed(queue_item, "Empty post")
+                    await self._mark_failed(queue_item, "Empty post: no media and no text")
                     return False
                     
             except TelegramError as e:
