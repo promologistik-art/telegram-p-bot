@@ -185,7 +185,21 @@ async def set_post_interval_callback(update: Update, context: ContextTypes.DEFAU
     return ConversationHandler.END
 
 
-# ============ НАСТРОЙКА ПОДПИСИ (УПРОЩЁННАЯ) ============
+# ============ НАСТРОЙКА ПОДПИСИ ============
+
+def extract_username_from_link(link: str) -> str:
+    """Извлекает username из ссылки t.me."""
+    # t.me/username или https://t.me/username или @username
+    patterns = [
+        r'(?:https?://)?t\.me/([a-zA-Z0-9_]+)',
+        r'@([a-zA-Z0-9_]+)'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, link)
+        if match:
+            return match.group(1)
+    return None
+
 
 def parse_signature_input(text: str) -> str:
     """
@@ -195,41 +209,58 @@ def parse_signature_input(text: str) -> str:
     - "Просто текст" -> "Просто текст"
     - "Текст | https://t.me/username" -> '<a href="https://t.me/username">Текст</a>'
     - "https://t.me/username" -> '<a href="https://t.me/username">@username</a>'
+    - "Сделано в https://t.me/username" -> 'Сделано в <a href="https://t.me/username">@username</a>'
     """
     text = text.strip()
     
-    # Проверяем формат "Текст | ссылка"
+    # Формат "Текст | ссылка"
     if "|" in text:
         parts = text.split("|", 1)
         label = parts[0].strip()
         link = parts[1].strip()
         
         if link:
-            # Если ссылка без https://, добавляем
             if not link.startswith("http"):
                 link = "https://" + link
             
+            username = extract_username_from_link(link)
+            if username:
+                # Если в тексте уже есть @username, не дублируем
+                if f"@{username}" not in label:
+                    label = f"{label} @{username}"
+            
             return f'<a href="{link}">{label}</a>'
     
-    # Проверяем, является ли ввод просто ссылкой
-    link_pattern = r'^(https?://)?(t\.me/|@)?([a-zA-Z0-9_]+)$'
-    match = re.match(link_pattern, text)
-    if match:
-        username = match.group(3)
+    # Ищем все ссылки t.me в тексте и заменяем на красивый формат
+    def replace_link(match):
+        full_link = match.group(0)
+        username = extract_username_from_link(full_link)
+        if username:
+            return f'<a href="{full_link}">@{username}</a>'
+        return full_link
+    
+    # Заменяем все найденные t.me ссылки
+    link_pattern = r'(?:https?://)?t\.me/[a-zA-Z0-9_]+'
+    if re.search(link_pattern, text):
+        text = re.sub(link_pattern, replace_link, text)
+        return text
+    
+    # Проверяем, является ли ввод просто username (@username)
+    username_match = re.match(r'^@([a-zA-Z0-9_]+)$', text)
+    if username_match:
+        username = username_match.group(1)
+        link = f"https://t.me/{username}"
+        return f'<a href="{link}">@{username}</a>'
+    
+    # Проверяем, является ли это просто ссылка без текста
+    username = extract_username_from_link(text)
+    if username:
         # Формируем полную ссылку
         if text.startswith("http"):
             link = text
         else:
             link = f"https://t.me/{username}"
-        
         return f'<a href="{link}">@{username}</a>'
-    
-    # Проверяем, является ли это полной ссылкой на канал
-    url_pattern = r'^https?://t\.me/([a-zA-Z0-9_]+)$'
-    match = re.match(url_pattern, text)
-    if match:
-        username = match.group(1)
-        return f'<a href="{text}">@{username}</a>'
     
     # Если ничего не подошло — возвращаем как простой текст
     return text
@@ -255,6 +286,9 @@ async def set_signature_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"   <code>Мой канал</code>\n\n"
         f"🔗 <b>Текст + ссылка (через | ):</b>\n"
         f"   <code>Мой канал | https://t.me/username</code>\n\n"
+        f"🔗 <b>Текст со ссылкой внутри:</b>\n"
+        f"   <code>Сделано в https://t.me/username</code>\n"
+        f"   <i>Бот сам заменит ссылку на красивый @username</i>\n\n"
         f"🔗 <b>Только ссылка:</b>\n"
         f"   <code>https://t.me/username</code>\n\n"
         f"Отправьте <code>удалить</code> чтобы убрать подпись.\n"
