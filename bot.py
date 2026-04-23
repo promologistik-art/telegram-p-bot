@@ -19,6 +19,7 @@ from handlers import (
     add_target_start, add_target_forward, my_targets, delete_target_callback,
     set_interval_start, set_interval_callback,
     set_post_interval_start, set_post_interval_callback,
+    set_post_start_time_callback,
     set_signature_start, set_signature_input,
     status, project_stats,
     parse_now, queue_status, post_now, clear_old_queue, clear_failed_queue, reset_history,
@@ -29,7 +30,8 @@ from handlers import (
     setup_bot_commands,
     AWAITING_SOURCE_USERNAME, AWAITING_TARGET_FORWARD, AWAITING_CRITERIA,
     AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE,
-    AWAITING_POST_INTERVAL, AWAITING_BROADCAST_MESSAGE
+    AWAITING_POST_INTERVAL, AWAITING_POST_START_TIME,
+    AWAITING_BROADCAST_MESSAGE
 )
 
 from poster import PosterService
@@ -98,7 +100,8 @@ async def main():
     set_post_interval_conv = ConversationHandler(
         entry_points=[CommandHandler("set_post_interval", set_post_interval_start)],
         states={
-            AWAITING_POST_INTERVAL: [CallbackQueryHandler(set_post_interval_callback, pattern="^post_")]
+            AWAITING_POST_INTERVAL: [CallbackQueryHandler(set_post_interval_callback, pattern="^post_")],
+            AWAITING_POST_START_TIME: [CallbackQueryHandler(set_post_start_time_callback, pattern="^starttime_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
@@ -120,11 +123,10 @@ async def main():
     )
     
     # ============ Command Handlers ============
-    # ВАЖНО: команды должны быть ЗАРЕГИСТРИРОВАНЫ ДО ConversationHandler
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("test", test_scraper))  # ← ДО broadcast_conv
+    app.add_handler(CommandHandler("test", test_scraper))
     app.add_handler(CommandHandler("my_projects", my_projects))
     app.add_handler(CommandHandler("my_sources", my_sources))
     app.add_handler(CommandHandler("my_targets", my_targets))
@@ -147,7 +149,7 @@ async def main():
     app.add_handler(set_interval_conv)
     app.add_handler(set_post_interval_conv)
     app.add_handler(set_signature_conv)
-    app.add_handler(broadcast_conv)  # ← ПОСЛЕ test_scraper
+    app.add_handler(broadcast_conv)
     
     # ============ Message Handlers ============
     
