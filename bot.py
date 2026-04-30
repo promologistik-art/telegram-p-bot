@@ -15,26 +15,33 @@ from handlers import (
     back_to_projects_callback,
     add_source_start, add_source_username, add_source_criteria,
     criteria_views_input, criteria_reactions_input,
+    media_filter_callback, duration_callback, remove_text_callback,
     my_sources, delete_source_callback,
-    add_target_start, add_target_forward, my_targets, delete_target_callback,
+    add_target_start, add_target_platform, add_target_forward,
+    add_target_vk_token, add_target_vk_group,
+    my_targets, delete_target_callback,
     set_interval_start, set_interval_callback,
     set_post_interval_start, set_post_interval_callback,
     set_post_start_time_callback,
     set_signature_start, set_signature_input,
     status, project_stats,
-    parse_now, queue_status, post_now, clear_old_queue, clear_failed_queue, reset_history,
+    parse_now, queue_status, post_now,
+    clear_old_queue, clear_failed_queue, clear_all_queue, clear_project_queue,
+    reset_history,
     admin_panel, admin_callback, admin_back_callback,
     admin_set_tariff_start, admin_extend_trial_start,
     broadcast_start, broadcast_send,
-    test_scraper,
+    test_scraper, debug_reactions,
     setup_bot_commands,
     AWAITING_SOURCE_USERNAME, AWAITING_TARGET_FORWARD, AWAITING_CRITERIA,
     AWAITING_INTERVAL, AWAITING_VIEWS, AWAITING_REACTIONS, AWAITING_SIGNATURE,
     AWAITING_POST_INTERVAL, AWAITING_POST_START_TIME,
+    AWAITING_MEDIA_FILTER, AWAITING_REMOVE_TEXT,
+    AWAITING_TARGET_PLATFORM, AWAITING_VK_TOKEN, AWAITING_VK_GROUP,
     AWAITING_BROADCAST_MESSAGE
 )
 
-from poster import PosterService
+from posters import TelegramPoster
 from scheduler import Scheduler
 from post_scheduler import PostScheduler
 from backup import BackupService, AutoBackup
@@ -53,7 +60,7 @@ async def main():
     app = Application.builder().token(Config.BOT_TOKEN).build()
     await setup_bot_commands(app)
     
-    poster = PosterService(app.bot)
+    poster = TelegramPoster(app.bot)
     scheduler = Scheduler(poster)
     post_scheduler = PostScheduler(poster)
     
@@ -77,6 +84,11 @@ async def main():
             AWAITING_CRITERIA: [CallbackQueryHandler(add_source_criteria, pattern="^criteria_")],
             AWAITING_VIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, criteria_views_input)],
             AWAITING_REACTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, criteria_reactions_input)],
+            AWAITING_MEDIA_FILTER: [
+                CallbackQueryHandler(media_filter_callback, pattern="^media_"),
+                CallbackQueryHandler(duration_callback, pattern="^duration_"),
+            ],
+            AWAITING_REMOVE_TEXT: [CallbackQueryHandler(remove_text_callback, pattern="^text_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
@@ -84,7 +96,10 @@ async def main():
     add_target_conv = ConversationHandler(
         entry_points=[CommandHandler("add_target", add_target_start)],
         states={
-            AWAITING_TARGET_FORWARD: [MessageHandler(filters.FORWARDED, add_target_forward)]
+            AWAITING_TARGET_PLATFORM: [CallbackQueryHandler(add_target_platform, pattern="^platform_")],
+            AWAITING_TARGET_FORWARD: [MessageHandler(filters.FORWARDED, add_target_forward)],
+            AWAITING_VK_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_target_vk_token)],
+            AWAITING_VK_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_target_vk_group)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
@@ -127,6 +142,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("test", test_scraper))
+    app.add_handler(CommandHandler("debug_reactions", debug_reactions))
     app.add_handler(CommandHandler("my_projects", my_projects))
     app.add_handler(CommandHandler("my_sources", my_sources))
     app.add_handler(CommandHandler("my_targets", my_targets))
@@ -137,6 +153,8 @@ async def main():
     app.add_handler(CommandHandler("postnow", post_now))
     app.add_handler(CommandHandler("clear_queue", clear_old_queue))
     app.add_handler(CommandHandler("clear_failed", clear_failed_queue))
+    app.add_handler(CommandHandler("clear_all", clear_all_queue))
+    app.add_handler(CommandHandler("clear_project", clear_project_queue))
     app.add_handler(CommandHandler("reset_history", reset_history))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("admin_set_tariff", admin_set_tariff_start))
@@ -159,7 +177,7 @@ async def main():
     
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_|tariff_set_|user_tariff_|extend_user_|deactivate_user_|activate_user_|user_manage_|tariff_for_|set_tariff_)"))
     app.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin_back$"))
-    app.add_handler(CallbackQueryHandler(projects_callback, pattern="^(create_project|select_project_|delete_project_|confirm_delete_|cancel_delete|stats_project_|settings_project_)"))
+    app.add_handler(CallbackQueryHandler(projects_callback, pattern="^(create_project|select_project_|delete_project_|confirm_delete_|cancel_delete|stats_project_)"))
     app.add_handler(CallbackQueryHandler(back_to_projects_callback, pattern="^back_to_projects$"))
     app.add_handler(CallbackQueryHandler(delete_source_callback, pattern="^del_source_"))
     app.add_handler(CallbackQueryHandler(delete_target_callback, pattern="^del_target_"))

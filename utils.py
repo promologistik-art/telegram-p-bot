@@ -1,205 +1,139 @@
-import re
-from typing import Optional, Tuple
-from datetime import datetime, timedelta
-import pytz
+import logging
+from datetime import datetime
+from telegram import Update, BotCommand
+from telegram.ext import ContextTypes
+from sqlalchemy import select, func
+from database import AsyncSessionLocal
+from models import User, Project, SourceChannel, TargetChannel
+from config import Config
+from .constants import CURRENT_PROJECT_KEY
 
-def extract_channel_username(text: str) -> Optional[str]:
-    """Извлечь username канала из текста или ссылки."""
-    patterns = [
-        r'(?:https?://)?t(?:elegram)?\.me/([a-zA-Z0-9_]+)',
-        r'@([a-zA-Z0-9_]+)'
+logger = logging.getLogger(__name__)
+
+TARIFF_LIMITS = {
+    "trial": {"max_projects": 1, "max_sources_per_project": 3, "min_post_interval": 120, "min_check_interval": 60, "name": "Пробный"},
+    "basic": {"max_projects": 1, "max_sources_per_project": 3, "min_post_interval": 120, "min_check_interval": 60, "name": "Базовый"},
+    "standard": {"max_projects": 3, "max_sources_per_project": 5, "min_post_interval": 60, "min_check_interval": 30, "name": "Стандарт"},
+    "pro": {"max_projects": 10, "max_sources_per_project": 10, "min_post_interval": 30, "min_check_interval": 15, "name": "PRO"},
+    "unlimited": {"max_projects": 999, "max_sources_per_project": 999, "min_post_interval": 1, "min_check_interval": 5, "name": "Безлимит"}
+}
+
+def get_tariff_limits(tariff: str) -> dict:
+    return TARIFF_LIMITS.get(tariff, TARIFF_LIMITS["trial"])
+
+async def get_current_project(telegram_id: int, context: ContextTypes.DEFAULT_TYPE) -> Project:
+    project_id = context.user_data.get(CURRENT_PROJECT_KEY)
+    async with AsyncSessionLocal() as session:
+        if project_id:
+            result = await session.execute(select(Project).where(Project.id == project_id, Project.user_id == telegram_id))
+            project = result.scalar_one_or_none()
+            if project:
+                return project
+        # Берём первый активный проект
+        result = await session.execute(select(Project).where(Project.user_id == telegram_id).order_by(Project.id))
+        project = result.scalars().first()
+        if project:
+            context.user_data[CURRENT_PROJECT_KEY] = project.id
+        return project
+
+async def require_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Project:
+    telegram_id = update.effective_user.id
+    project = await get_current_project(telegram_id, context)
+    if not project:
+        await update.message.reply_text("❌ У вас нет проектов.\nСоздайте через /my_projects")
+        return None
+    return project
+
+async def is_admin(telegram_id: int) -> bool:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        return user and user.is_admin
+
+async def check_user_access(telegram_id: int) -> tuple:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            return False, "❌ Пользователь не найден", None
+        if user.is_admin:
+            return True, "", user
+        now = datetime.utcnow()
+        if user.subscription_active and user.subscription_ends_at and user.subscription_ends_at > now:
+            return True, "", user
+        if user.trial_ends_at and user.trial_ends_at > now:
+            days_left = (user.trial_ends_at - now).days
+            return True, f"🎁 Триал активен ({days_left} дн.)", user
+        return False, "❌ Доступ закончился", user
+
+async def check_action_limit(user: User, action: str, **kwargs) -> tuple:
+    limits = get_tariff_limits(user.tariff)
+    if action == "create_project":
+        count = await get_user_projects_count(user.telegram_id)
+        if count >= limits["max_projects"]:
+            return False, f"❌ Лимит проектов ({limits['max_projects']})"
+    elif action == "add_source":
+        project_id = kwargs.get("project_id")
+        if project_id:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(func.count()).select_from(SourceChannel).where(SourceChannel.project_id == project_id))
+                if result.scalar() >= limits["max_sources_per_project"]:
+                    return False, f"❌ Лимит источников ({limits['max_sources_per_project']})"
+    elif action == "set_post_interval":
+        interval = kwargs.get("interval_minutes", 0)
+        if interval < limits["min_post_interval"]:
+            return False, f"❌ Мин. интервал: {limits['min_post_interval']} мин"
+    elif action == "set_check_interval":
+        interval = kwargs.get("interval_minutes", 0)
+        if interval < limits["min_check_interval"]:
+            return False, f"❌ Мин. интервал: {limits['min_check_interval']} мин"
+    return True, ""
+
+async def setup_bot_commands(application):
+    commands = [
+        BotCommand("start", "🏠 Главное меню"),
+        BotCommand("my_projects", "📁 Мои проекты"),
+        BotCommand("add_source", "📥 Добавить источник"),
+        BotCommand("add_target", "📤 Добавить цель"),
+        BotCommand("my_sources", "📊 Источники"),
+        BotCommand("my_targets", "🎯 Цели"),
+        BotCommand("set_interval", "⏰ Интервал парсинга"),
+        BotCommand("set_post_interval", "📅 Интервал публикации"),
+        BotCommand("set_signature", "✍️ Подпись"),
+        BotCommand("status", "📈 Статистика"),
+        BotCommand("parse", "🔄 Парсинг сейчас"),
+        BotCommand("queue", "📬 Очередь"),
+        BotCommand("postnow", "🚀 Пост сейчас"),
+        BotCommand("help", "📋 Помощь"),
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    return None
+    await application.bot.set_my_commands(commands)
 
+async def get_sources_count(project_id: int) -> int:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(func.count()).select_from(SourceChannel).where(SourceChannel.project_id == project_id))
+        return result.scalar()
 
-def calculate_score(post: dict, criteria: dict, post_time: datetime = None) -> Tuple[int, bool]:
-    """
-    Расчет очков поста на основе критериев.
-    Возвращает (score, is_fallback)
-    
-    is_fallback = True если пост не прошёл критерии, но мы берём его как fallback (самый свежий)
-    is_fallback = False если пост прошёл критерии
-    """
-    views = post.get("views", 0)
-    reactions = post.get("reactions", 0)
-    
-    min_views = criteria.get("min_views", 0)
-    min_reactions = criteria.get("min_reactions", 0)
-    
-    # Проверяем, проходит ли по критериям
-    passes_criteria = True
-    
-    if min_views and views < min_views:
-        passes_criteria = False
-    
-    if min_reactions and reactions < min_reactions:
-        passes_criteria = False
-    
-    # Если нет критериев — считаем что проходит
-    if not min_views and not min_reactions:
-        passes_criteria = True
-    
-    if passes_criteria:
-        # Основной score
-        score = 0
-        if min_views:
-            score += (views // 1000) * 10  # каждые 1000 просмотров = 10 очков
-        if min_reactions:
-            score += reactions  # каждая реакция = 1 очко
-        if post.get("has_media", False):
-            score += 5  # бонус за медиа
-        
-        if score == 0:
-            score = 1
-        
-        return (score, False)
-    else:
-        # Fallback — используем timestamp (чем новее, тем выше score)
-        if post_time:
-            # Используем timestamp поста
-            score = int(post_time.timestamp())
-        else:
-            # Если нет времени, пробуем распарсить из datetime строки
-            dt_str = post.get("datetime", "")
-            if dt_str:
-                try:
-                    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                    score = int(dt.timestamp())
-                except:
-                    score = 0
-            else:
-                score = 0
-        
-        return (score, True)
+async def get_project_target(project_id: int) -> TargetChannel:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(TargetChannel).where(TargetChannel.project_id == project_id))
+        return result.scalar_one_or_none()
 
+async def get_user_projects_count(telegram_id: int) -> int:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(func.count()).select_from(Project).where(Project.user_id == telegram_id))
+        return result.scalar()
 
-def clean_caption(text: str) -> str:
-    """
-    Очистить текст от упоминаний и ссылок.
-    Сохраняет нормальные пробелы между предложениями.
-    """
-    if not text:
-        return ""
-    
-    # Удаляем @упоминания
-    text = re.sub(r'@\w+', '', text)
-    
-    # Удаляем t.me ссылки
-    text = re.sub(r'(https?://)?t\.me/\S+', '', text)
-    
-    # Удаляем http ссылки
-    text = re.sub(r'https?://\S+', '', text)
-    
-    # Убираем HTML-теги если есть
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # Сохраняем структуру переносов
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    
-    # Убираем множественные пробелы
-    text = re.sub(r' +', ' ', text)
-    
-    # Исправляем слипшиеся предложения (точка + слово без пробела)
-    text = re.sub(r'\.([А-ЯA-Z])', r'. \1', text)
-    text = re.sub(r'\!([А-ЯA-Z])', r'! \1', text)
-    text = re.sub(r'\?([А-ЯA-Z])', r'? \1', text)
-    
-    text = text.strip()
-    
-    # Обрезаем до 1024 символов
-    if len(text) > 1024:
-        text = text[:1021] + "..."
-    
-    return text
+async def send_project_ready_message(update: Update, project_name: str):
+    text = f"✅ <b>Проект «{project_name}» готов!</b>\n\n• /set_interval — парсинг\n• /set_post_interval — публикация\n• /parse — запустить"
+    await update.message.reply_text(text, parse_mode="HTML")
 
-
-def calculate_next_post_time(project) -> Optional[datetime]:
-    """Рассчитать время следующей публикации с учётом расписания."""
-    moscow_tz = pytz.timezone("Europe/Moscow")
-    now_moscow = datetime.now(moscow_tz)
-    
-    current_hour = now_moscow.hour
-    
-    if current_hour < project.active_hours_start:
-        next_time = now_moscow.replace(
-            hour=project.active_hours_start,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
-        return next_time
-    
-    if current_hour >= project.active_hours_end:
-        next_time = now_moscow.replace(
-            hour=project.active_hours_start,
-            minute=0,
-            second=0,
-            microsecond=0
-        ) + timedelta(days=1)
-        return next_time
-    
-    next_time = now_moscow + timedelta(hours=project.post_interval_hours)
-    
-    if next_time.hour >= project.active_hours_end:
-        next_time = now_moscow.replace(
-            hour=project.active_hours_start,
-            minute=0,
-            second=0,
-            microsecond=0
-        ) + timedelta(days=1)
-    
-    return next_time
-
-
-def get_moscow_time() -> datetime:
-    """Получить текущее время в Москве."""
-    moscow_tz = pytz.timezone("Europe/Moscow")
-    return datetime.now(moscow_tz)
-
-
-def format_datetime(dt: datetime) -> str:
-    """Форматировать дату и время для отображения."""
-    if not dt:
-        return "никогда"
-    
-    moscow_tz = pytz.timezone("Europe/Moscow")
-    if dt.tzinfo is None:
-        dt = moscow_tz.localize(dt)
-    
-    return dt.strftime("%d.%m.%Y %H:%M")
-
-
-def format_number(num: int) -> str:
-    """Форматировать число с разделителями."""
-    if num >= 1000000:
-        return f"{num/1000000:.1f}M"
-    elif num >= 1000:
-        return f"{num/1000:.1f}K"
-    return str(num)
-
-
-def parse_number(text: str) -> int:
-    """Парсинг чисел с K, M."""
-    if not text:
-        return 0
-    
-    text = str(text).strip().upper().replace(" ", "")
-    text = text.replace(",", ".")
-    
-    if "K" in text:
-        return int(float(text.replace("K", "")) * 1000)
-    elif "M" in text:
-        return int(float(text.replace("M", "")) * 1000000)
-    else:
-        try:
-            clean = re.sub(r'[^\d.]', '', text)
-            if clean:
-                return int(float(clean))
-        except:
-            pass
-    
-    return 0
+async def update_user_limits(user: User, tariff: str):
+    limits = get_tariff_limits(tariff)
+    user.tariff = tariff
+    user.max_projects = limits["max_projects"]
+    user.max_sources_per_project = limits["max_sources_per_project"]
+    user.min_post_interval_minutes = limits["min_post_interval"]
+    user.min_check_interval_minutes = limits["min_check_interval"]
+    async with AsyncSessionLocal() as session:
+        await session.merge(user)
+        await session.commit()
